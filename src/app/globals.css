@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  /* Colors */
+  --color-canvas-light: #FFFFFF;
+  --color-canvas-dark: #0B0B0C;
+  
+  --color-surface-light: #F5F5F7;
+  --color-surface-dark: #1B1B1D;
+  
+  --color-border-light: #DEDEE1;
+  --color-border-dark: #363638;
+  
+  --color-foreground-light: #1D1D1F;
+  --color-foreground-dark: #F5F5F7;
+  
+  --color-muted-light: #727276;
+  --color-muted-dark: #A0A0A5;
+
+  /* Border Radius */
+  --radius-panel: 22px;
+  --radius-input: 13px;
+  --radius-pill: 9999px;
+
+  /* Typography Tracking (Negative Spacing) */
+  --tracking-display: -0.03em;
+  --tracking-headline: -0.025em;
+  --tracking-body: -0.01em;
+}
+
+/* Base Body Styles strictly applying the monochrome palette */
+@layer base {
+  body {
+    @apply bg-canvas-light text-foreground-light dark:bg-canvas-dark dark:text-foreground-dark antialiased;
+  }
+}
