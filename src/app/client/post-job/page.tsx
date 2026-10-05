@@ -3,6 +3,17 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+// --- RAZORPAY SCRIPT LOADER ---
+const loadRazorpayScript = () => {
+  return new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+};
+
 // The 11 Master Categories and their complete skill dictionaries
 const CATEGORY_MAP: Record<string, string[]> = {
   "Code Review": [
@@ -46,13 +57,12 @@ export default function PostJobPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [baseBudget, setBaseBudget] = useState("");
-  const [timeLimit, setTimeLimit] = useState("2"); // Set minimum to 2 hours default
+  const [timeLimit, setTimeLimit] = useState("2"); 
   
   const [category, setCategory] = useState<string>("Code Review");
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [skillSearchQuery, setSkillSearchQuery] = useState("");
 
-  // Generates dropdown options from 2 to 48 hours
   const hourOptions = Array.from({ length: 47 }, (_, i) => i + 2);
 
   const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -69,7 +79,6 @@ export default function PostJobPage() {
     }
   };
 
-  // Financial Calculations: Base Budget + 30% Platform Fee
   const parsedBudget = parseFloat(baseBudget) || 0;
   const platformFee = parsedBudget * 0.30;
   const finalEscrow = parsedBudget + platformFee;
@@ -91,14 +100,80 @@ export default function PostJobPage() {
       baseBudget, 
       platformFee, 
       finalEscrow, 
-      timeLimit: Number(timeLimit), // Converted to number for DB insertion
+      timeLimit: Number(timeLimit),
       category, 
       selectedSkills 
     };
 
-    console.log("Proceeding to Escrow with:", payload);
-    
-    // TODO: Await Razorpay Escrow API route execution here
+    try {
+      // 1. Get the Order ID from your backend
+      const response = await fetch("/api/escrow/create-hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+
+      if (!data.orderId) {
+        alert("Failed to create escrow hold.");
+        return;
+      }
+
+      // 2. Load the Razorpay SDK
+      const res = await loadRazorpayScript();
+      if (!res) {
+        alert("Razorpay SDK failed to load. Are you online?");
+        return;
+      }
+
+      // 3. Open the Checkout Modal
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, 
+        amount: data.amount,
+        currency: "INR",
+        name: "Humynity",
+        description: `Escrow Hold: ${title}`,
+        order_id: data.orderId,
+        handler: async function (response: any) {
+          console.log("Payment Authorized! Payment ID:", response.razorpay_payment_id);
+          
+          try {
+            // Wake up Phase 3: The Wave Dispatcher
+            const dispatchRes = await fetch("/api/dispatch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                gigId: data.orderId, 
+                jobCategory: category,
+                jobSkills: selectedSkills,
+                jobTier: parsedBudget >= 5000 ? "T4" : "T2", 
+              }),
+            });
+
+            if (dispatchRes.ok) {
+              // Redirect client to the radar tracking page immediately
+              router.push(`/client/radar?gigId=${data.orderId}`);
+            } else {
+              alert("Payment secured, but dispatcher failed to start.");
+            }
+          } catch (error) {
+            console.error("Dispatcher trigger error:", error);
+            alert("An error occurred while starting the dispatcher.");
+          }
+        },
+        theme: {
+          color: "#4F46E5",
+        },
+      };
+
+      const paymentObject = new (window as any).Razorpay(options);
+      paymentObject.open();
+
+    } catch (error) {
+      console.error("Checkout Error:", error);
+      alert("An error occurred during checkout.");
+    }
   };
 
   const currentSkills = CATEGORY_MAP[category] || [];
@@ -112,7 +187,6 @@ export default function PostJobPage() {
       
       <div className="max-w-[1040px] mx-auto relative z-10">
         
-        {/* Header */}
         <div className="mb-10">
           <h1 className="text-4xl font-semibold tracking-display mb-2">Create New Gig</h1>
           <p className="text-muted-light dark:text-muted-dark tracking-body text-sm">
@@ -122,7 +196,6 @@ export default function PostJobPage() {
 
         <form onSubmit={handlePostGig} className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
-          {/* Left Column: Form Fields */}
           <div className="lg:col-span-8 space-y-8 bg-surface-light/80 dark:bg-surface-dark/80 backdrop-blur-md p-8 rounded-panel border border-border-light dark:border-border-dark">
             
             <div className="space-y-2">
@@ -256,7 +329,6 @@ export default function PostJobPage() {
 
           </div>
 
-          {/* Right Column: Summary & Escrow Panel */}
           <div className="lg:col-span-4">
             <div className="sticky top-6 bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md rounded-panel border border-border-light dark:border-border-dark p-6 shadow-sm">
               
