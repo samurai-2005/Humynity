@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -44,21 +44,47 @@ const CATEGORY_MAP: Record<string, string[]> = {
 export default function WorkerOnboarding() {
   const router = useRouter();
   const supabase = createClient();
-  
-  // Now tracks multiple domains
+
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [skillSearchQuery, setSkillSearchQuery] = useState("");
   const [termsAccepted, setTermsAccepted] = useState(false);
-  
+
   const [loading, setLoading] = useState(false);
+  const [pageChecking, setPageChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Check if user is already onboarded
+  useEffect(() => {
+    async function checkExistingWorkerStatus() {
+      const { data: { user }, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !user) {
+        router.replace("/login");
+        return;
+      }
+
+      const { data: worker } = await supabase
+        .from("workers")
+        .select("terms_accepted")
+        .eq("worker_id", user.id)
+        .maybeSingle();
+
+      if (worker?.terms_accepted) {
+        // Already an onboarded specialist: forward to dashboard
+        router.replace("/worker/dashboard");
+        return;
+      }
+
+      setPageChecking(false);
+    }
+
+    checkExistingWorkerStatus();
+  }, [router, supabase]);
 
   const toggleCategory = (cat: string) => {
     setSelectedCategories((prev) => {
       if (prev.includes(cat)) {
-        // If deselected, strictly remove any verified skills associated with this domain
-        const skillsToRemove = CATEGORY_MAP[cat];
+        const skillsToRemove = CATEGORY_MAP[cat] || [];
         setSelectedSkills((prevSkills) => prevSkills.filter((s) => !skillsToRemove.includes(s)));
         return prev.filter((c) => c !== cat);
       } else {
@@ -69,25 +95,24 @@ export default function WorkerOnboarding() {
 
   const toggleSkill = (skill: string) => {
     if (selectedSkills.includes(skill)) {
-      setSelectedSkills(selectedSkills.filter(s => s !== skill));
+      setSelectedSkills(selectedSkills.filter((s) => s !== skill));
     } else {
       setSelectedSkills([...selectedSkills, skill]);
     }
   };
 
-  // Dynamically merge skills from all selected domains and remove duplicates
   const currentSkills = Array.from(
     new Set(selectedCategories.flatMap((cat) => CATEGORY_MAP[cat] || []))
   ).sort();
-  
-  const filteredSkills = currentSkills.filter((skill) => 
+
+  const filteredSkills = currentSkills.filter((skill) =>
     skill.toLowerCase().includes(skillSearchQuery.toLowerCase())
   );
 
   const handleCompleteProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedCategories.length === 0 || selectedSkills.length === 0 || !termsAccepted) {
-      setError("Please complete all requirements.");
+      setError("Please complete all requirements and accept the escrow terms.");
       return;
     }
 
@@ -96,30 +121,51 @@ export default function WorkerOnboarding() {
 
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) throw new Error("Authentication failed.");
+      if (userError || !user) {
+        throw new Error("Authentication session expired. Please sign in again.");
+      }
 
+      // Secure Upsert: bind authenticated user ID with terms acceptance & initial capacity
       const { error: updateError } = await supabase
-        .from('profiles')
-        .update({ 
-          primary_categories: selectedCategories, // Updated database column
+        .from("workers")
+        .upsert({
+          worker_id: user.id,
+          categories: selectedCategories,
           skills: selectedSkills,
-        })
-        .eq('id', user.id);
+          capacity: 1,
+          is_online: true,
+          standing: "good",
+          tier: "T3",
+          match_percentage: 100,
+          terms_accepted: true,
+          terms_accepted_at: new Date().toISOString(),
+        });
 
       if (updateError) throw updateError;
 
       router.push("/worker/dashboard");
-
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || "Failed to finalize worker onboarding.");
     } finally {
       setLoading(false);
     }
   };
 
+  if (pageChecking) {
+    return (
+      <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark flex items-center justify-center p-6 text-foreground-light dark:text-foreground-dark">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-foreground-light dark:border-foreground-dark border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs uppercase tracking-wider text-muted-light dark:text-muted-dark font-medium">
+            Verifying Specialist Status...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#363638_1px,transparent_1px)] [background-size:24px_24px] py-12 px-6 flex items-center justify-center relative">
-      
       <div className="w-full max-w-[680px] bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md rounded-panel border border-border-light dark:border-border-dark p-8 shadow-sm relative z-10">
         
         <div className="text-center mb-10">
@@ -146,8 +192,8 @@ export default function WorkerOnboarding() {
                     type="button"
                     onClick={() => toggleCategory(cat)}
                     className={`h-9 px-4 rounded-pill text-sm font-medium transition-colors border flex-shrink-0 ${
-                      isSelected 
-                        ? "bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark border-transparent" 
+                      isSelected
+                        ? "bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark border-transparent"
                         : "bg-canvas-light dark:bg-canvas-dark text-foreground-light dark:text-foreground-dark border-border-light dark:border-border-dark hover:bg-surface-light dark:hover:bg-surface-dark"
                     }`}
                   >
@@ -171,7 +217,7 @@ export default function WorkerOnboarding() {
                   {selectedSkills.length} selected
                 </span>
               </div>
-              
+
               <input
                 type="text"
                 placeholder="Search combined skills..."
@@ -190,8 +236,8 @@ export default function WorkerOnboarding() {
                         type="button"
                         onClick={() => toggleSkill(skill)}
                         className={`h-9 px-4 rounded-pill text-sm font-medium transition-colors border flex-shrink-0 ${
-                          isSelected 
-                            ? "bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark border-transparent" 
+                          isSelected
+                            ? "bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark border-transparent"
                             : "bg-canvas-light dark:bg-canvas-dark text-foreground-light dark:text-foreground-dark border-border-light dark:border-border-dark hover:bg-surface-light dark:hover:bg-surface-dark"
                         }`}
                       >
@@ -201,7 +247,7 @@ export default function WorkerOnboarding() {
                   })
                 ) : (
                   <p className="text-sm text-muted-light dark:text-muted-dark italic p-2">
-                    No skills found matching "{skillSearchQuery}".
+                    No skills found matching &quot;{skillSearchQuery}&quot;.
                   </p>
                 )}
               </div>
@@ -225,7 +271,7 @@ export default function WorkerOnboarding() {
                 )}
               </div>
               <span className="text-sm text-muted-light dark:text-muted-dark leading-relaxed">
-                I agree to the stringent AnonGig Escrow Policies, acknowledge that my WhatsApp number will be used for skill-match alerts, and confirm my selected expertise is accurate.
+                I agree to the stringent Humynity Escrow Policies, acknowledge that my in-app Live Radar will be used for skill-match alerts, and confirm my selected expertise is accurate.
               </span>
             </label>
           </div>
@@ -243,7 +289,7 @@ export default function WorkerOnboarding() {
           >
             {loading ? "Locking Profile..." : "Initialize Radar"}
           </button>
-          
+
         </form>
       </div>
     </div>

@@ -1,11 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 
 // --- RAZORPAY SCRIPT LOADER ---
-const loadRazorpayScript = () => {
+const loadRazorpayScript = (): Promise<boolean> => {
   return new Promise((resolve) => {
+    if (typeof window !== "undefined" && (window as any).Razorpay) {
+      resolve(true);
+      return;
+    }
     const script = document.createElement("script");
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
     script.onload = () => resolve(true);
@@ -14,7 +19,6 @@ const loadRazorpayScript = () => {
   });
 };
 
-// The 11 Master Categories and their complete skill dictionaries
 const CATEGORY_MAP: Record<string, string[]> = {
   "Code Review": [
     "Android Development", "Angular", "Api Development", "Aspnet Mvc", "Blazor", "C", "Clojure", "Cobol", "Code Review", "Codeigniter", "CPP", "Csharp", "Dart", "Debugging", "Design Patterns", "Django", "Dotnet", "Dotnet Core", "Elixir", "Expressjs", "Fastapi", "Flask", "Flutter", "Fortran", "Gatsby", "GIT", "GO", "Graphql", "Groovy", "Grpc", "Haskell", "Integration Testing", "Ionic", "Ios Development", "Java", "Javascript", "Jetpack Compose", "Kotlin", "Laravel", "LUA", "Matlab", "Nestjs", "Nextjs", "Nodejs", "Nuxtjs", "Objective C", "OOP", "Performance Tuning Code", "Perl", "PHP", "Python", "R", "Rails", "React", "React Native", "Refactoring", "Regular Expressions", "Remix", "Rest Api", "Ruby", "Rust", "Scala", "Solidity", "Spring Boot", "Svelte", "Swift", "Swiftui", "Symfony", "TDD", "Typescript", "Unit Testing", "Vbnet", "Vuejs", "Webhooks", "Websockets", "Xamarin"
@@ -53,38 +57,65 @@ const CATEGORY_MAP: Record<string, string[]> = {
 
 export default function PostJobPage() {
   const router = useRouter();
-  
+  const supabase = createClient();
+
+  const [posterId, setPosterId] = useState<string | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [baseBudget, setBaseBudget] = useState("");
-  const [timeLimit, setTimeLimit] = useState("2"); 
-  
+  const [timeLimit, setTimeLimit] = useState("2");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [category, setCategory] = useState<string>("Code Review");
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [skillSearchQuery, setSkillSearchQuery] = useState("");
 
   const hourOptions = Array.from({ length: 47 }, (_, i) => i + 2);
 
+  // 1. Authenticate user on mount
+  useEffect(() => {
+    async function checkClientAuth() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+      setPosterId(user.id);
+      setAuthChecking(false);
+    }
+    checkClientAuth();
+  }, [router, supabase]);
+
   const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setCategory(e.target.value);
-    setSelectedSkills([]); 
-    setSkillSearchQuery(""); 
+    setSelectedSkills([]);
+    setSkillSearchQuery("");
   };
 
   const toggleSkill = (skill: string) => {
     if (selectedSkills.includes(skill)) {
-      setSelectedSkills(selectedSkills.filter(s => s !== skill));
+      setSelectedSkills(selectedSkills.filter((s) => s !== skill));
     } else {
       setSelectedSkills([...selectedSkills, skill]);
     }
   };
 
   const parsedBudget = parseFloat(baseBudget) || 0;
-  const platformFee = parsedBudget * 0.30;
+  const platformFee = Math.round(parsedBudget * 0.30);
   const finalEscrow = parsedBudget + platformFee;
 
   const handlePostGig = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!posterId) {
+      alert("Please sign in before posting a gig.");
+      router.push("/login");
+      return;
+    }
     if (parsedBudget < 500) {
       alert("Minimum base budget is ₹500");
       return;
@@ -93,20 +124,21 @@ export default function PostJobPage() {
       alert("Please select at least one required skill.");
       return;
     }
-    
-    const payload = { 
-      title, 
-      description, 
-      baseBudget, 
-      platformFee, 
-      finalEscrow, 
+
+    setIsSubmitting(true);
+
+    const payload = {
+      posterId,
+      title: title.trim(),
+      description: description.trim(),
+      baseBudget: parsedBudget,
       timeLimit: Number(timeLimit),
-      category, 
-      selectedSkills 
+      category,
+      selectedSkills,
     };
 
     try {
-      // 1. Get the Order ID from your backend
+      // 1. Create the Escrow Hold order and persist gig to Supabase
       const response = await fetch("/api/escrow/create-hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -115,89 +147,108 @@ export default function PostJobPage() {
 
       const data = await response.json();
 
-      if (!data.orderId) {
-        alert("Failed to create escrow hold.");
+      if (!response.ok || !data.orderId || !data.gigId) {
+        alert(data.error || "Failed to initialize escrow hold.");
+        setIsSubmitting(false);
         return;
       }
 
       // 2. Load the Razorpay SDK
-      const res = await loadRazorpayScript();
-      if (!res) {
-        alert("Razorpay SDK failed to load. Are you online?");
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) {
+        alert("Razorpay checkout failed to load. Please verify your internet connection.");
+        setIsSubmitting(false);
         return;
       }
 
-      // 3. Open the Checkout Modal
+      // 3. Open Checkout Modal
       const options = {
-        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, 
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: data.amount,
         currency: "INR",
         name: "Humynity",
         description: `Escrow Hold: ${title}`,
         order_id: data.orderId,
-        handler: async function (response: any) {
-          console.log("Payment Authorized! Payment ID:", response.razorpay_payment_id);
-          
+        handler: async function (paymentResponse: any) {
+          console.log("[Payment Authorized] ID:", paymentResponse.razorpay_payment_id);
+
           try {
-            // Wake up Phase 3: The Wave Dispatcher
+            // Trigger Wave Dispatcher and save razorpay_payment_id
             const dispatchRes = await fetch("/api/dispatch", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                gigId: data.orderId, 
+                gigId: data.gigId,
+                paymentId: paymentResponse.razorpay_payment_id,
                 jobCategory: category,
                 jobSkills: selectedSkills,
-                jobTier: parsedBudget >= 5000 ? "T4" : "T2", 
+                jobTier: parsedBudget >= 5000 ? "T4" : "T2",
               }),
             });
 
             if (dispatchRes.ok) {
-              // Redirect client to the radar tracking page immediately
-              router.push(`/client/radar?gigId=${data.orderId}`);
+              // Redirect using real database UUID
+              router.push(`/client/radar?gigId=${data.gigId}`);
             } else {
-              alert("Payment secured, but dispatcher failed to start.");
+              alert("Payment authorized, but candidate dispatch encountered an error.");
+              router.push(`/client/radar?gigId=${data.gigId}`);
             }
           } catch (error) {
             console.error("Dispatcher trigger error:", error);
-            alert("An error occurred while starting the dispatcher.");
+            router.push(`/client/radar?gigId=${data.gigId}`);
+          } finally {
+            setIsSubmitting(false);
           }
         },
+        modal: {
+          ondismiss: function () {
+            setIsSubmitting(false);
+          },
+        },
         theme: {
-          color: "#4F46E5",
+          color: "#2563EB",
         },
       };
 
       const paymentObject = new (window as any).Razorpay(options);
       paymentObject.open();
-
     } catch (error) {
       console.error("Checkout Error:", error);
-      alert("An error occurred during checkout.");
+      alert("An unexpected error occurred during checkout.");
+      setIsSubmitting(false);
     }
   };
 
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark flex items-center justify-center p-6 text-foreground-light dark:text-foreground-dark">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-foreground-light dark:border-foreground-dark border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs uppercase tracking-wider text-muted-light dark:text-muted-dark font-medium">
+            Verifying Client Session...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const currentSkills = CATEGORY_MAP[category] || [];
-  
-  const filteredSkills = currentSkills.filter((skill) => 
+  const filteredSkills = currentSkills.filter((skill) =>
     skill.toLowerCase().includes(skillSearchQuery.toLowerCase())
   );
 
   return (
     <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#363638_1px,transparent_1px)] [background-size:24px_24px] py-12 px-6 text-foreground-light dark:text-foreground-dark relative">
-      
       <div className="max-w-[1040px] mx-auto relative z-10">
-        
         <div className="mb-10">
           <h1 className="text-4xl font-semibold tracking-display mb-2">Create New Gig</h1>
           <p className="text-muted-light dark:text-muted-dark tracking-body text-sm">
-            Specify your task requirements. Our algorithm targets workers with an 85%+ skill match.
+            Specify your task requirements. Our algorithm targets specialists with an 85%+ skill match.
           </p>
         </div>
 
         <form onSubmit={handlePostGig} className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
           <div className="lg:col-span-8 space-y-8 bg-surface-light/80 dark:bg-surface-dark/80 backdrop-blur-md p-8 rounded-panel border border-border-light dark:border-border-dark">
-            
             <div className="space-y-2">
               <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
                 Gig Title
@@ -231,7 +282,9 @@ export default function PostJobPage() {
                   Base Budget (₹)
                 </label>
                 <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-light dark:text-muted-dark">₹</span>
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-light dark:text-muted-dark">
+                    ₹
+                  </span>
                   <input
                     type="number"
                     placeholder="500"
@@ -264,7 +317,6 @@ export default function PostJobPage() {
             </div>
 
             <div className="pt-4 border-t border-border-light dark:border-border-dark space-y-6">
-              
               <div className="space-y-2">
                 <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
                   Project Category
@@ -275,7 +327,9 @@ export default function PostJobPage() {
                   className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors text-foreground-light dark:text-foreground-dark"
                 >
                   {Object.keys(CATEGORY_MAP).map((cat) => (
-                    <option key={cat} value={cat}>{cat}</option>
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -283,13 +337,13 @@ export default function PostJobPage() {
               <div className="space-y-4">
                 <div className="flex justify-between items-end">
                   <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
-                    Required Skills (Select to require)
+                    Required Skills
                   </label>
                   <span className="text-xs text-muted-light dark:text-muted-dark">
                     {selectedSkills.length} selected
                   </span>
                 </div>
-                
+
                 <input
                   type="text"
                   placeholder={`Search ${category} skills...`}
@@ -308,8 +362,8 @@ export default function PostJobPage() {
                           type="button"
                           onClick={() => toggleSkill(skill)}
                           className={`h-9 px-4 rounded-pill text-sm font-medium transition-colors border flex-shrink-0 ${
-                            isSelected 
-                              ? "bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark border-transparent" 
+                            isSelected
+                              ? "bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark border-transparent"
                               : "bg-canvas-light dark:bg-canvas-dark text-foreground-light dark:text-foreground-dark border-border-light dark:border-border-dark hover:bg-surface-light dark:hover:bg-surface-dark"
                           }`}
                         >
@@ -319,27 +373,24 @@ export default function PostJobPage() {
                     })
                   ) : (
                     <p className="text-sm text-muted-light dark:text-muted-dark italic p-2">
-                      No skills found matching "{skillSearchQuery}".
+                      No skills found matching &quot;{skillSearchQuery}&quot;.
                     </p>
                   )}
                 </div>
               </div>
-
             </div>
-
           </div>
 
           <div className="lg:col-span-4">
             <div className="sticky top-6 bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md rounded-panel border border-border-light dark:border-border-dark p-6 shadow-sm">
-              
               <h2 className="text-xl font-semibold mb-6">Gig Summary</h2>
-              
+
               <div className="space-y-0">
                 <div className="flex justify-between items-center py-4 border-b border-border-light dark:border-border-dark">
                   <span className="text-sm text-muted-light dark:text-muted-dark">Algorithm Match</span>
                   <span className="text-sm font-medium">Strict (85%+)</span>
                 </div>
-                
+
                 <div className="flex justify-between items-center py-4 border-b border-border-light dark:border-border-dark">
                   <span className="text-sm text-muted-light dark:text-muted-dark">Base Budget</span>
                   <span className="text-sm font-medium">₹{parsedBudget.toFixed(2)}</span>
@@ -369,14 +420,13 @@ export default function PostJobPage() {
 
               <button
                 type="submit"
-                className="w-full h-12 rounded-pill bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark font-medium transition-transform active:scale-[0.985]"
+                disabled={isSubmitting || parsedBudget < 500 || selectedSkills.length === 0}
+                className="w-full h-12 rounded-pill bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark font-medium transition-transform active:scale-[0.985] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Deposit & Find Workers
+                {isSubmitting ? "Securing Escrow..." : "Deposit & Find Workers"}
               </button>
-              
             </div>
           </div>
-
         </form>
       </div>
     </div>
