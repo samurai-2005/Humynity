@@ -26,12 +26,15 @@ export default function UnifiedDashboard() {
   const [clientGigs, setClientGigs] = useState<ClientGig[]>([]);
   const [loadingGigs, setLoadingGigs] = useState(true);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [username, setUsername] = useState<string>("User");
 
   // 1. Fetch Client's Posted Gigs
   const fetchClientGigs = useCallback(async (userId: string) => {
     const { data, error } = await supabase
       .from("gigs")
-      .select("id, title, primary_category, base_budget, total_escrow, status, worker_id, created_at, delivered_at, revision_count")
+      .select(
+        "id, title, primary_category, base_budget, total_escrow, status, worker_id, created_at, delivered_at, revision_count"
+      )
       .eq("poster_id", userId)
       .order("created_at", { ascending: false });
 
@@ -43,12 +46,30 @@ export default function UnifiedDashboard() {
 
   useEffect(() => {
     async function initUser() {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
       if (!user) {
         router.replace("/login");
         return;
       }
+
       setCurrentUserId(user.id);
+
+      // Fetch Profile Username
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("username")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const resolvedName =
+        profile?.username ||
+        user.user_metadata?.username ||
+        (user.email ? user.email.split("@")[0] : "User");
+
+      setUsername(resolvedName);
       fetchClientGigs(user.id);
     }
     initUser();
@@ -82,7 +103,10 @@ export default function UnifiedDashboard() {
   const handleWorkerRouting = async () => {
     setRoutingWorker(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
       if (!user) {
         router.push("/login");
         return;
@@ -108,111 +132,156 @@ export default function UnifiedDashboard() {
   };
 
   const pendingReviewCount = clientGigs.filter((g) => g.status === "delivered").length;
-  const activeEscrowTotal = clientGigs
-    .filter((g) => g.status === "searching" || g.status === "locked" || g.status === "delivered")
-    .reduce((sum, g) => sum + (Number(g.base_budget) || 0), 0);
+  const activeCount = clientGigs.filter((g) =>
+    ["searching", "locked", "delivered"].includes(g.status)
+  ).length;
+  const completedCount = clientGigs.filter((g) => g.status === "rated").length;
 
   return (
-    <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#363638_1px,transparent_1px)] [background-size:24px_24px] py-10 px-6 text-foreground-light dark:text-foreground-dark">
-      <div className="max-w-6xl mx-auto space-y-10">
+    <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark py-8 px-4 sm:px-6 text-foreground-light dark:text-foreground-dark">
+      <div className="max-w-6xl mx-auto space-y-8">
 
-        {/* TOP: ACTION REQUIRED BANNER */}
+        {/* WELCOME HEADER & QUICK SUMMARY */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-border-light dark:border-border-dark">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
+              Welcome back, <span className="text-blue-600 dark:text-blue-400">@{username}</span>
+            </h1>
+            <p className="text-xs sm:text-sm text-muted-light dark:text-muted-dark mt-1">
+              Manage your tasks, review specialist deliverables, and monitor live progress.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="px-3 py-1.5 rounded-pill bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark text-xs flex items-center gap-1.5 shadow-sm">
+              <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+              <span className="text-muted-light dark:text-muted-dark font-medium">Active:</span>
+              <span className="font-bold font-mono">{activeCount}</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-pill bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark text-xs flex items-center gap-1.5 shadow-sm">
+              <span className="text-muted-light dark:text-muted-dark font-medium">Completed:</span>
+              <span className="font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                {completedCount}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* ACTION REQUIRED: PENDING DELIVERABLES BANNER */}
         {pendingReviewCount > 0 && (
-          <div className="p-5 bg-amber-500/10 border-2 border-amber-500/30 rounded-panel flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in">
+          <div className="p-4 sm:p-5 bg-amber-500/10 border-2 border-amber-500/30 rounded-panel flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in shadow-sm">
             <div className="flex items-center gap-3">
-              <span className="text-2xl">⚠️</span>
+              <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center text-lg flex-shrink-0">
+                🔔
+              </div>
               <div>
-                <h2 className="text-base font-bold text-amber-600 dark:text-amber-400">
-                  Action Required: {pendingReviewCount} Deliverable{pendingReviewCount > 1 ? "s" : ""} Ready for Review
+                <h2 className="text-sm sm:text-base font-bold text-amber-700 dark:text-amber-300">
+                  {pendingReviewCount} Deliverable{pendingReviewCount > 1 ? "s" : ""} Ready for Your Review
                 </h2>
-                <p className="text-xs text-muted-light dark:text-muted-dark">
-                  Specialists have submitted work for your verification. Review deliverables to release escrow or request revisions.
+                <p className="text-xs text-muted-light dark:text-muted-dark mt-0.5">
+                  Specialists have submitted work. Review the preview files to approve release or request changes.
                 </p>
               </div>
             </div>
             <a
-              href="#client-ledger"
-              className="h-10 px-5 rounded-pill bg-amber-500 hover:bg-amber-400 text-slate-900 font-semibold text-xs flex items-center justify-center flex-shrink-0 transition-transform active:scale-95"
+              href="#task-history"
+              className="h-9 px-4 rounded-pill bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold text-xs flex items-center justify-center flex-shrink-0 transition-transform active:scale-95 shadow-sm"
             >
-              Inspect Tasks ↓
+              Review Deliverables ↓
             </a>
           </div>
         )}
 
-        {/* QUICK NAVIGATION CARDS */}
-        <div className="grid md:grid-cols-2 gap-6">
-          <button
-            onClick={() => router.push("/client/post-job")}
-            className="text-left group p-8 bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md rounded-panel border border-border-light dark:border-border-dark hover:border-foreground-light dark:hover:border-foreground-dark transition-all duration-300 shadow-sm"
-          >
-            <div className="w-12 h-12 mb-6 rounded-xl bg-blue-600 text-white flex items-center justify-center">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
-            <h2 className="text-2xl font-semibold mb-2">Post a New Gig</h2>
-            <p className="text-muted-light dark:text-muted-dark text-xs leading-relaxed mb-6">
-              Create an urgent task specification, authorize funds via Razorpay escrow, and match with verified talent instantly.
-            </p>
-            <span className="text-xs font-semibold flex items-center gap-2 group-hover:translate-x-1 transition-transform text-blue-600">
-              Create Task Specification &rarr;
-            </span>
-          </button>
-
-          <button
-            onClick={handleWorkerRouting}
-            disabled={routingWorker}
-            className="text-left group p-8 bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md rounded-panel border border-border-light dark:border-border-dark hover:border-foreground-light dark:hover:border-foreground-dark transition-all duration-300 shadow-sm disabled:opacity-50"
-          >
-            <div className="w-12 h-12 mb-6 rounded-xl bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark flex items-center justify-center">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-              </svg>
-            </div>
-            <h2 className="text-2xl font-semibold mb-2">Specialist Radar Portal</h2>
-            <p className="text-muted-light dark:text-muted-dark text-xs leading-relaxed mb-6">
-              Access your real-time gig listener, claim incoming exclusive matches, submit deliverables, and manage KYC payouts.
-            </p>
-            <span className="text-xs font-semibold flex items-center gap-2 group-hover:translate-x-1 transition-transform">
-              {routingWorker ? "Verifying Clearance..." : "Switch to Specialist View &rarr;"}
-            </span>
-          </button>
-        </div>
-
-        {/* CLIENT GIG MANAGEMENT LEDGER */}
-        <div id="client-ledger" className="space-y-4 pt-4">
-          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-border-light dark:border-border-dark pb-4">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight">Client Project & Escrow Ledger</h2>
-              <p className="text-xs text-muted-light dark:text-muted-dark">
-                Track live worker execution, inspect deliverables, and release escrow settlements.
+        {/* PRIMARY ACTION CARDS */}
+        <div className="grid md:grid-cols-3 gap-6">
+          
+          {/* POST TASK HERO CARD */}
+          <div className="md:col-span-2 p-6 sm:p-8 bg-surface-light dark:bg-surface-dark rounded-panel border border-border-light dark:border-border-dark shadow-sm flex flex-col justify-between relative overflow-hidden group">
+            <div className="space-y-3 relative z-10">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-pill bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs font-semibold">
+                ✨ Task Delegation
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight">Need something done?</h2>
+              <p className="text-xs sm:text-sm text-muted-light dark:text-muted-dark leading-relaxed max-w-lg">
+                Choose a domain or popular template, set your budget, and match with an available specialist in minutes. Payment stays protected until you approve.
               </p>
             </div>
-            <div className="flex items-center gap-4 text-xs font-medium">
-              <span className="text-muted-light dark:text-muted-dark">
-                Active Escrow: <strong className="font-mono text-foreground-light dark:text-foreground-dark">₹{activeEscrowTotal}</strong>
-              </span>
+
+            <div className="mt-6 pt-4 flex flex-wrap items-center gap-3 relative z-10">
               <button
-                onClick={() => currentUserId && fetchClientGigs(currentUserId)}
-                className="text-blue-600 hover:underline"
+                onClick={() => router.push("/client/post-job")}
+                className="h-11 px-6 rounded-pill bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs transition-transform active:scale-95 shadow-md shadow-blue-500/20"
               >
-                Refresh Ledger
+                + Post a New Task
+              </button>
+              <span className="text-xs text-muted-light dark:text-muted-dark">
+                Starting from ₹500 with 100% Escrow Protection
+              </span>
+            </div>
+          </div>
+
+          {/* SPECIALIST MODE CARD */}
+          <div className="p-6 sm:p-8 bg-surface-light dark:bg-surface-dark rounded-panel border border-border-light dark:border-border-dark shadow-sm flex flex-col justify-between">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-pill bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+                💼 Specialist Mode
+              </div>
+              <h3 className="text-lg font-bold">Earn by Delivering Tasks</h3>
+              <p className="text-xs text-muted-light dark:text-muted-dark leading-relaxed">
+                Receive live task invitations matched to your skill tier. Claim tasks, submit deliverables, and get paid directly.
+              </p>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-border-light dark:border-border-dark">
+              <button
+                onClick={handleWorkerRouting}
+                disabled={routingWorker}
+                className="w-full h-11 px-4 rounded-pill border border-border-light dark:border-border-dark hover:border-emerald-500 text-foreground-light dark:text-foreground-dark font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+              >
+                {routingWorker ? "Verifying..." : "Open Specialist Radar →"}
               </button>
             </div>
           </div>
 
+        </div>
+
+        {/* TASK HISTORY & DELIVERIES TABLE */}
+        <div id="task-history" className="space-y-4 pt-2">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 pb-2">
+            <div>
+              <h2 className="text-lg sm:text-xl font-bold tracking-tight">My Tasks & Deliveries</h2>
+              <p className="text-xs text-muted-light dark:text-muted-dark">
+                Track active progress, review submitted deliverables, and access task workspaces.
+              </p>
+            </div>
+            <button
+              onClick={() => currentUserId && fetchClientGigs(currentUserId)}
+              className="text-xs text-blue-600 dark:text-blue-400 hover:underline self-start sm:self-auto font-medium"
+            >
+              🔄 Refresh List
+            </button>
+          </div>
+
           {loadingGigs ? (
-            <div className="p-12 text-center text-xs text-muted-light dark:text-muted-dark">
-              Loading your task history...
+            <div className="p-12 text-center text-xs text-muted-light dark:text-muted-dark bg-surface-light dark:bg-surface-dark rounded-panel border border-border-light dark:border-border-dark">
+              Loading your tasks...
             </div>
           ) : clientGigs.length === 0 ? (
-            <div className="p-12 text-center bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-panel space-y-3">
-              <p className="text-sm text-muted-light dark:text-muted-dark">You have not posted any gigs yet.</p>
+            <div className="p-12 text-center bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-panel space-y-4">
+              <div className="w-12 h-12 rounded-full bg-blue-500/10 text-blue-600 mx-auto flex items-center justify-center text-xl">
+                📂
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold">No tasks created yet</h3>
+                <p className="text-xs text-muted-light dark:text-muted-dark max-w-sm mx-auto">
+                  When you post a task, you can track specialist progress and review deliverables right here.
+                </p>
+              </div>
               <Link
                 href="/client/post-job"
-                className="inline-block h-10 px-6 rounded-pill bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold leading-10"
+                className="inline-flex items-center h-10 px-5 rounded-pill bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md"
               >
-                Post Your First Gig
+                Post Your First Task →
               </Link>
             </div>
           ) : (
@@ -221,11 +290,11 @@ export default function UnifiedDashboard() {
                 <thead className="bg-canvas-light dark:bg-canvas-dark text-muted-light dark:text-muted-dark uppercase tracking-wider font-semibold border-b border-border-light dark:border-border-dark">
                   <tr>
                     <th className="p-4">Date</th>
-                    <th className="p-4">Task Specification</th>
-                    <th className="p-4">Category</th>
-                    <th className="p-4">Escrow Value</th>
+                    <th className="p-4">Task Title</th>
+                    <th className="p-4">Domain</th>
+                    <th className="p-4">Amount</th>
                     <th className="p-4">Status</th>
-                    <th className="p-4 text-right">Action</th>
+                    <th className="p-4 text-right">Workspace</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-light dark:divide-border-dark">
@@ -242,7 +311,7 @@ export default function UnifiedDashboard() {
                         className={`transition-colors ${
                           isDelivered
                             ? "bg-amber-500/5 hover:bg-amber-500/10"
-                            : "hover:bg-surface-light/50 dark:hover:bg-surface-dark/50"
+                            : "hover:bg-canvas-light/50 dark:hover:bg-canvas-dark/50"
                         }`}
                       >
                         <td className="p-4 text-muted-light dark:text-muted-dark font-mono">
@@ -254,7 +323,9 @@ export default function UnifiedDashboard() {
                         <td className="p-4 text-muted-light dark:text-muted-dark">
                           {item.primary_category}
                         </td>
-                        <td className="p-4 font-mono font-bold">₹{item.base_budget}</td>
+                        <td className="p-4 font-mono font-bold">
+                          ₹{item.base_budget}
+                        </td>
                         <td className="p-4">
                           <span
                             className={`px-2.5 py-1 rounded-pill text-[10px] font-bold uppercase tracking-wider ${
@@ -263,21 +334,21 @@ export default function UnifiedDashboard() {
                                 : isRated
                                 ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20"
                                 : isLocked
-                                ? "bg-purple-500/10 text-purple-600 border border-purple-500/20"
+                                ? "bg-blue-500/10 text-blue-600 border border-blue-500/20"
                                 : isCancelled
                                 ? "bg-red-500/10 text-red-500 border border-red-500/20"
-                                : "bg-blue-500/10 text-blue-600 border border-blue-500/20"
+                                : "bg-purple-500/10 text-purple-600 border border-purple-500/20"
                             }`}
                           >
                             {isDelivered
-                              ? "Action Needed"
+                              ? "Review Needed"
                               : isRated
                               ? "Completed"
                               : isLocked
-                              ? "Worker Working"
+                              ? "In Progress"
                               : isCancelled
-                              ? "Cancelled"
-                              : "Matching"}
+                              ? "Cancelled / Refunded"
+                              : "Matching Specialist"}
                           </span>
                         </td>
                         <td className="p-4 text-right">
@@ -286,28 +357,28 @@ export default function UnifiedDashboard() {
                               href={`/client/workspace/${item.id}`}
                               className="inline-block h-8 px-4 rounded-pill bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold text-xs leading-8 transition-transform active:scale-95 shadow-sm"
                             >
-                              Review & Decide →
+                              Review Delivery →
                             </Link>
                           ) : isLocked ? (
                             <Link
                               href={`/client/workspace/${item.id}`}
-                              className="text-blue-600 hover:underline font-medium"
+                              className="text-blue-600 dark:text-blue-400 hover:underline font-semibold"
                             >
                               Track Progress →
                             </Link>
                           ) : isSearching ? (
                             <Link
                               href={`/client/radar?gigId=${item.id}`}
-                              className="text-blue-600 hover:underline font-medium"
+                              className="text-blue-600 dark:text-blue-400 hover:underline font-semibold"
                             >
-                              Radar Search →
+                              Live Radar →
                             </Link>
                           ) : (
                             <Link
                               href={`/client/workspace/${item.id}`}
-                              className="text-muted-light dark:text-muted-dark hover:underline"
+                              className="text-muted-light dark:text-muted-dark hover:underline font-medium"
                             >
-                              Receipt Room →
+                              Workspace Details →
                             </Link>
                           )}
                         </td>
