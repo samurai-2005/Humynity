@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -33,6 +33,9 @@ export default function WorkerDashboardPage() {
   const [history, setHistory] = useState<HistoricalGig[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
 
+  const activeGigRef = useRef<IncomingGig | null>(null);
+  activeGigRef.current = activeGig;
+
   // 1. Fetch Gig History for authenticated specialist
   const fetchHistory = useCallback(async (currentId: string) => {
     const { data, error } = await supabase
@@ -47,7 +50,39 @@ export default function WorkerDashboardPage() {
     setLoadingHistory(false);
   }, [supabase]);
 
-  // 2. Initialize Specialist Session
+  // 2. Query DB directly for any active exclusive dispatch (survives refreshes & dropped WS)
+  const checkForActiveDispatch = useCallback(async (currentId: string) => {
+    if (activeGigRef.current) return;
+
+    const { data: openOffer, error } = await supabase
+      .from("gigs")
+      .select("id, primary_category, base_budget, match_score, dispatch_expires_at")
+      .eq("candidate_worker_id", currentId)
+      .eq("status", "searching")
+      .gt("dispatch_expires_at", new Date().toISOString())
+      .order("dispatch_expires_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && openOffer && openOffer.dispatch_expires_at) {
+      const remainingSeconds = Math.max(
+        0,
+        Math.floor((new Date(openOffer.dispatch_expires_at).getTime() - Date.now()) / 1000)
+      );
+
+      if (remainingSeconds > 0) {
+        setActiveGig({
+          gigId: openOffer.id,
+          category: openOffer.primary_category,
+          budget: Number(openOffer.base_budget),
+          matchScore: openOffer.match_score || 95,
+        });
+        setCountdown(remainingSeconds);
+      }
+    }
+  }, [supabase]);
+
+  // 3. Initialize Specialist Session
   useEffect(() => {
     async function initWorker() {
       const {
@@ -57,37 +92,47 @@ export default function WorkerDashboardPage() {
       if (user) {
         setWorkerId(user.id);
         fetchHistory(user.id);
+        checkForActiveDispatch(user.id);
       }
     }
 
     initWorker();
-  }, [supabase, fetchHistory]);
+  }, [supabase, fetchHistory, checkForActiveDispatch]);
 
-  // 3. Realtime Radar Listener (dynamically bound to active worker ID)
+  // 4. Realtime Broadcast & Postgres Table Listener
   useEffect(() => {
     if (!workerId) return;
 
-    const channel = supabase
+    // A. Listen for instant WebSocket broadcasts
+    const broadcastChannel = supabase
       .channel(`radar_${workerId}`)
       .on("broadcast", { event: "new_gig" }, (payload) => {
-        console.log("[Worker Dashboard] Received dispatch:", payload.payload);
+        console.log("[Worker Dashboard] Received real-time dispatch:", payload.payload);
         setActiveGig(payload.payload as IncomingGig);
         setCountdown(60);
       })
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [workerId, supabase]);
+    // B. Fallback polling every 4 seconds while idle to catch any missed dispatch
+    const pollInterval = setInterval(() => {
+      checkForActiveDispatch(workerId);
+    }, 4000);
 
-  // 60-Second Countdown timer for incoming match
+    return () => {
+      supabase.removeChannel(broadcastChannel);
+      clearInterval(pollInterval);
+    };
+  }, [workerId, supabase, checkForActiveDispatch]);
+
+  // 5. Countdown timer for incoming match
   useEffect(() => {
     if (!activeGig) return;
+
     if (countdown <= 0) {
       setActiveGig(null);
       return;
     }
+
     const timer = setInterval(() => setCountdown((c) => c - 1), 1000);
     return () => clearInterval(timer);
   }, [activeGig, countdown]);

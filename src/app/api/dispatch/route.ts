@@ -1,22 +1,34 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Initialize Supabase admin client with Service Role to bypass RLS for worker matching
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false } }
 );
 
-// Helper: Reliably broadcast over Supabase Realtime with subscription handshake & teardown
+// Helper: Safely parse array fields (handles PostgreSQL text[], jsonb, or raw JSON strings)
+function parseArrayField(field: any): string[] {
+  if (!field) return [];
+  if (Array.isArray(field)) return field;
+  try {
+    const parsed = typeof field === "string" ? JSON.parse(field) : field;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return typeof field === "string" ? [field] : [];
+  }
+}
+
+// Helper: Reliably broadcast over Supabase Realtime with network flush buffer
 async function broadcastToWorker(workerId: string, payload: any): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    const channel = supabase.channel(`radar_${workerId}`, {
-      config: { broadcast: { ack: true } },
-    });
+    const channel = supabase.channel(`radar_${workerId}`);
 
     const timeout = setTimeout(() => {
       supabase.removeChannel(channel);
       resolve(false);
-    }, 5000);
+    }, 4000);
 
     channel.subscribe(async (status) => {
       if (status === "SUBSCRIBED") {
@@ -26,9 +38,12 @@ async function broadcastToWorker(workerId: string, payload: any): Promise<boolea
             event: "new_gig",
             payload,
           });
-          clearTimeout(timeout);
-          supabase.removeChannel(channel);
-          resolve(true);
+          // Wait 500ms before removing channel so packet flushes across network
+          setTimeout(() => {
+            clearTimeout(timeout);
+            supabase.removeChannel(channel);
+            resolve(true);
+          }, 500);
         } catch (err) {
           console.error(`[Broadcast Error] Specialist ${workerId}:`, err);
           clearTimeout(timeout);
@@ -44,68 +59,33 @@ async function broadcastToWorker(workerId: string, payload: any): Promise<boolea
   });
 }
 
-// Helper: Run the exclusive cascade across matched candidates
-async function runCascade(
-  realGigId: string,
-  workers: any[],
-  jobCategory: string,
-  budget: number
-): Promise<boolean> {
-  for (const worker of workers) {
-    // 1. Verify gig is still open and unassigned
-    const { data: gig } = await supabase
-      .from("gigs")
-      .select("status, worker_id")
-      .eq("id", realGigId)
-      .maybeSingle();
-
-    if (gig?.worker_id || gig?.status === "locked" || gig?.status === "in_progress") {
-      console.log(`[Cascade] Gig ${realGigId} is already locked. Halting cascade.`);
-      return true;
-    }
-
-    // 2. Broadcast exclusive alert to this specific worker's Live Radar
-    console.log(`[Cascade] Broadcasting to specialist ID: ${worker.worker_id}`);
-    await broadcastToWorker(worker.worker_id, {
-      gigId: realGigId,
-      category: jobCategory,
-      budget,
-      matchScore: worker.match_percentage || 100,
-    });
-
-    // 3. Poll for claim (up to 60 seconds, checking every 3 seconds)
-    for (let t = 0; t < 20; t++) {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      const { data: checkGig } = await supabase
-        .from("gigs")
-        .select("status, worker_id")
-        .eq("id", realGigId)
-        .maybeSingle();
-
-      if (checkGig?.worker_id || checkGig?.status === "locked" || checkGig?.status === "in_progress") {
-        console.log(`[Cascade] Worker ${checkGig.worker_id} successfully claimed ${realGigId}.`);
-        return true;
-      }
-    }
-
-    console.log(`[Cascade] Worker ${worker.worker_id} timed out. Escalating to next candidate...`);
-  }
-
-  return false;
+interface CandidateMatch {
+  worker_id: string;
+  tier: string;
+  tasks_completed: number;
+  matchScore: number;
 }
+
+const TIER_WEIGHT: Record<string, number> = {
+  standard: 1,
+  T1: 1,
+  T2: 2,
+  T3: 3,
+  T4: 4,
+  expert: 4,
+};
 
 export async function POST(req: Request) {
   try {
     const { gigId, jobCategory, jobSkills, jobTier, paymentId } = await req.json();
 
-    if (!gigId || !jobCategory || !jobSkills || !jobTier) {
+    if (!gigId || !jobCategory || !jobSkills) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Resolve gig by UUID or Razorpay Order ID
+    // 1. Fetch Gig Record
     const isOrderId = typeof gigId === "string" && gigId.startsWith("order_");
-    let gigQuery = supabase.from("gigs").select("id, base_budget, status, worker_id");
+    let gigQuery = supabase.from("gigs").select("id, poster_id, base_budget, status, worker_id");
 
     if (isOrderId) {
       gigQuery = gigQuery.eq("razorpay_order_id", gigId);
@@ -116,14 +96,15 @@ export async function POST(req: Request) {
     const { data: gigRecord, error: gigFetchErr } = await gigQuery.maybeSingle();
 
     if (gigFetchErr || !gigRecord) {
-      console.error("[Dispatcher] Gig record lookup failed:", gigFetchErr);
+      console.error("[Dispatcher] Gig lookup error:", gigFetchErr);
       return NextResponse.json({ error: "Gig record not found" }, { status: 404 });
     }
 
     const realGigId = gigRecord.id;
     const realBudget = Number(gigRecord.base_budget) || 0;
+    const posterId = gigRecord.poster_id;
 
-    // Persist paymentId if sent from client checkout
+    // Persist paymentId if provided from Razorpay checkout
     if (paymentId) {
       await supabase
         .from("gigs")
@@ -131,74 +112,152 @@ export async function POST(req: Request) {
         .eq("id", realGigId);
     }
 
-    // Return 200 immediately to avoid blocking client UI
-    const response = NextResponse.json(
-      { success: true, message: "Dispatcher started", gigId: realGigId },
-      { status: 200 }
-    );
+    // 2. Fetch all active specialists (excluding the job poster)
+    const { data: allWorkers, error: workersErr } = await supabase
+      .from("workers")
+      .select("worker_id, categories, skills, tier, capacity, tasks_completed, is_online, terms_accepted")
+      .eq("terms_accepted", true)
+      .eq("is_online", true)
+      .gt("capacity", 0)
+      .neq("worker_id", posterId);
 
-    // Run cascade in background
-    (async () => {
-      try {
-        let matchedWorkers: any[] = [];
+    if (workersErr || !allWorkers || allWorkers.length === 0) {
+      console.log(`[Dispatcher] No eligible specialists online for gig ${realGigId}`);
+      return NextResponse.json({
+        success: true,
+        message: "No specialists online",
+        gigId: realGigId,
+      });
+    }
 
-        // 1. Try matching via RPC
-        try {
-          const { data: rpcWorkers, error: rpcErr } = await supabase.rpc("get_elite_matches", {
-            job_category: jobCategory,
-            job_skills: jobSkills,
-            job_tier: jobTier,
-          }).limit(3);
+    // 3. Category Filter & Dynamic Skill Overlap Calculation
+    const requiredSkills: string[] = Array.isArray(jobSkills) ? jobSkills : [jobSkills];
+    const candidateMatches: CandidateMatch[] = [];
 
-          if (!rpcErr && rpcWorkers && rpcWorkers.length > 0) {
-            matchedWorkers = rpcWorkers;
-          }
-        } catch (rpcEx) {
-          console.warn("[Dispatcher] RPC get_elite_matches failed, falling back to direct query:", rpcEx);
-        }
+    for (const worker of allWorkers) {
+      const categories = parseArrayField(worker.categories);
+      const skills = parseArrayField(worker.skills);
 
-        // 2. Fallback: Query workers table directly if RPC yielded no matches
-        if (matchedWorkers.length === 0) {
-          console.log("[Dispatcher] Running direct worker table fallback query...");
-          const { data: directWorkers } = await supabase
-            .from("workers")
-            .select("worker_id, categories, skills, tier, capacity")
-            .eq("terms_accepted", true)
-            .gt("capacity", 0)
-            .contains("categories", [jobCategory])
-            .limit(3);
+      // Must be enrolled in this project category
+      if (!categories.includes(jobCategory)) continue;
 
-          if (directWorkers && directWorkers.length > 0) {
-            matchedWorkers = directWorkers.map((w) => ({
-              ...w,
-              match_percentage: 95,
-            }));
-          }
-        }
+      // Calculate exact skill overlap
+      const matchingSkillCount = requiredSkills.filter((reqSkill) =>
+        skills.some((wSkill) => wSkill.trim().toLowerCase() === reqSkill.trim().toLowerCase())
+      ).length;
 
-        // 3. Execute Cascade
-        let locked = false;
-        if (matchedWorkers.length > 0) {
-          locked = await runCascade(realGigId, matchedWorkers, jobCategory, realBudget);
-        }
+      const overlapPercentage = requiredSkills.length > 0
+        ? Math.round((matchingSkillCount / requiredSkills.length) * 100)
+        : 100;
 
-        // 4. Safe Network Handling: Retain searching status so gig remains in active pool
-        if (!locked) {
-          console.log(`[Dispatcher] No immediate specialist claim for ${realGigId}. Retaining 'searching' status in pool.`);
-          await supabase
-            .from("gigs")
-            .update({ status: "searching", lifecycle_state: "searching" })
-            .eq("id", realGigId)
-            .is("worker_id", null);
-        }
-      } catch (bgError) {
-        console.error("[Dispatcher Background Error]:", bgError);
+      // Target threshold: 70%+ overlap
+      if (overlapPercentage >= 70) {
+        candidateMatches.push({
+          worker_id: worker.worker_id,
+          tier: worker.tier || "standard",
+          tasks_completed: Number(worker.tasks_completed) || 0,
+          matchScore: overlapPercentage,
+        });
       }
-    })();
+    }
 
-    return response;
+    if (candidateMatches.length === 0) {
+      console.log(`[Dispatcher] No specialists met skill threshold for gig ${realGigId}`);
+      return NextResponse.json({
+        success: true,
+        message: "No skill matches found",
+        gigId: realGigId,
+      });
+    }
+
+    // 4. TIER & WORK DISTRIBUTION ENGINE
+    const isHighTierGig = realBudget >= 5000 || jobTier === "T4" || jobTier === "T3";
+    const hasZeroJobCandidates = candidateMatches.some((c) => c.tasks_completed === 0);
+
+    let eligibleCandidates: CandidateMatch[] = [];
+
+    if (isHighTierGig) {
+      // --- HIGH TIER GIG (>= ₹5,000) ---
+      // Prioritize High-Tier Veterans (T3/T4 with >= 2 completed tasks)
+      const highTierVeterans = candidateMatches.filter((c) => {
+        const weight = TIER_WEIGHT[c.tier] || 1;
+        return weight >= 3 && c.tasks_completed >= 2;
+      });
+
+      if (highTierVeterans.length > 0) {
+        console.log(`[Dispatcher] High-tier gig: unleashing ${highTierVeterans.length} veteran(s) on reserve.`);
+        eligibleCandidates = highTierVeterans;
+      } else {
+        // Fallback: If no veterans are online, use the general qualified pool
+        console.log(`[Dispatcher] High-tier gig: no T3/T4 veterans online. Using general pool.`);
+        eligibleCandidates = candidateMatches;
+      }
+
+      // Sort: Highest tier first, then highest tasks completed, then skill fit
+      eligibleCandidates.sort((a, b) => {
+        const tierDiff = (TIER_WEIGHT[b.tier] || 1) - (TIER_WEIGHT[a.tier] || 1);
+        if (tierDiff !== 0) return tierDiff;
+        if (b.tasks_completed !== a.tasks_completed) return b.tasks_completed - a.tasks_completed;
+        return b.matchScore - a.matchScore;
+      });
+    } else {
+      // --- STANDARD GIG (< ₹5,000) ---
+      // If 0-job specialists exist in this skill pool, hold high-tier veterans on reserve
+      eligibleCandidates = candidateMatches.filter((c) => {
+        const weight = TIER_WEIGHT[c.tier] || 1;
+        const isVeteran = weight >= 3 && c.tasks_completed >= 2;
+
+        if (isVeteran && hasZeroJobCandidates) {
+          console.log(`[Dispatcher] Specialist ${c.worker_id} held on reserve for high-tier jobs. Prioritizing unassigned specialists.`);
+          return false;
+        }
+        return true;
+      });
+
+      // Fallback: If all candidates were filtered, release to anyone available
+      if (eligibleCandidates.length === 0) {
+        eligibleCandidates = candidateMatches;
+      }
+
+      // Sort: Highest skill score first, then prioritize specialists with lowest tasks_completed (0-job first)
+      eligibleCandidates.sort((a, b) => {
+        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+        return a.tasks_completed - b.tasks_completed;
+      });
+    }
+
+    const bestCandidate = eligibleCandidates[0];
+    const dispatchExpiry = new Date(Date.now() + 60 * 1000).toISOString();
+
+    // 5. Persist the exclusive 60s offer to Supabase
+    await supabase
+      .from("gigs")
+      .update({
+        status: "searching",
+        candidate_worker_id: bestCandidate.worker_id,
+        dispatch_expires_at: dispatchExpiry,
+        match_score: bestCandidate.matchScore,
+      })
+      .eq("id", realGigId);
+
+    // 6. Broadcast real-time alert to specialist's live radar
+    console.log(`[Dispatcher] Dispatched gig ${realGigId} to candidate ${bestCandidate.worker_id} (${bestCandidate.matchScore}% fit).`);
+    await broadcastToWorker(bestCandidate.worker_id, {
+      gigId: realGigId,
+      category: jobCategory,
+      budget: realBudget,
+      matchScore: bestCandidate.matchScore,
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: "Gig dispatched to candidate",
+      gigId: realGigId,
+      matchedWorkerId: bestCandidate.worker_id,
+      matchScore: bestCandidate.matchScore,
+    });
   } catch (error: any) {
-    console.error("[Dispatcher Route Error]:", error);
+    console.error("[Dispatcher Error]:", error);
     return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 });
   }
 }
