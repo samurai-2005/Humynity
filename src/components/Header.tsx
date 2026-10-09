@@ -11,10 +11,15 @@ export default function Header() {
   const supabase = createClient();
 
   const [username, setUsername] = useState<string>("User");
-  const [balance, setBalance] = useState("0.00");
   const [isWorker, setIsWorker] = useState(false);
   const [isPanVerified, setIsPanVerified] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+
+  // Live Database Worker Metrics
+  const [rating, setRating] = useState<string>("New");
+  const [tier, setTier] = useState<string>("T1");
+  const [tasksCompleted, setTasksCompleted] = useState<number>(0);
+  const [standing, setStanding] = useState<string>("good");
 
   useEffect(() => {
     let isMounted = true;
@@ -25,7 +30,7 @@ export default function Header() {
       } = await supabase.auth.getUser();
 
       if (user && isMounted) {
-        // Fetch or default username
+        // 1. Fetch Profile Username
         const { data: profile } = await supabase
           .from("profiles")
           .select("username")
@@ -39,16 +44,30 @@ export default function Header() {
 
         setUsername(resolvedName);
 
-        // Fetch worker status and KYC verification
+        // 2. Fetch live metrics from workers table
         const { data: worker } = await supabase
           .from("workers")
-          .select("terms_accepted, is_pan_verified")
+          .select("terms_accepted, is_pan_verified, rating_avg, tier, tasks_completed, standing")
           .eq("worker_id", user.id)
           .maybeSingle();
 
         if (isMounted && worker) {
           setIsWorker(Boolean(worker.terms_accepted));
           setIsPanVerified(Boolean(worker.is_pan_verified));
+
+          if (worker.tier) setTier(worker.tier);
+          if (worker.standing) setStanding(worker.standing);
+          if (typeof worker.tasks_completed === "number") {
+            setTasksCompleted(worker.tasks_completed);
+          }
+
+          // Format real database rating
+          if (worker.rating_avg !== null && worker.rating_avg !== undefined) {
+            const parsedRating = parseFloat(String(worker.rating_avg));
+            setRating(isNaN(parsedRating) || parsedRating === 0 ? "New" : parsedRating.toFixed(1));
+          } else {
+            setRating("New");
+          }
         }
       }
     };
@@ -60,7 +79,7 @@ export default function Header() {
     };
   }, [supabase]);
 
-  // Close drawer automatically on route navigation
+  // Close drawer automatically on route change
   useEffect(() => {
     setIsDrawerOpen(false);
   }, [pathname]);
@@ -75,7 +94,6 @@ export default function Header() {
     <>
       <header className="w-full border-b border-border-light dark:border-border-dark bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          
           {/* LOGO */}
           <Link
             href="/dashboard"
@@ -115,7 +133,7 @@ export default function Header() {
             </Link>
           </nav>
 
-          {/* RIGHT ACTIONS: DRAWER TOGGLE (DESKTOP & MOBILE) */}
+          {/* DRAWER BUTTON */}
           <div className="flex items-center gap-3">
             <button
               onClick={() => setIsDrawerOpen(true)}
@@ -133,22 +151,17 @@ export default function Header() {
         </div>
       </header>
 
-      {/* SLIDE-OUT PROFILE HAMBURGER DRAWER */}
+      {/* SLIDE-OUT PROFILE DRAWER */}
       {isDrawerOpen && (
         <div className="fixed inset-0 z-50 flex justify-end animate-in fade-in duration-200">
-          
-          {/* Backdrop Blur */}
           <div
             className="fixed inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setIsDrawerOpen(false)}
           />
 
-          {/* Drawer Panel */}
           <div className="relative w-full max-w-xs sm:max-w-sm h-full bg-surface-light dark:bg-surface-dark border-l border-border-light dark:border-border-dark p-6 shadow-2xl flex flex-col justify-between overflow-y-auto z-10 animate-in slide-in-from-right duration-250">
-            
             <div className="space-y-6">
-              
-              {/* Drawer Header */}
+              {/* Profile Card Header */}
               <div className="flex justify-between items-center border-b border-border-light dark:border-border-dark pb-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shadow-md">
@@ -172,44 +185,82 @@ export default function Header() {
                 </button>
               </div>
 
-              {/* Discreet Wallet Balance Card */}
-              <div className="p-4 bg-canvas-light dark:bg-canvas-dark rounded-input border border-border-light dark:border-border-dark flex justify-between items-center">
+              {/* LIVE DATABASE RATING & STANDING CARD (REPLACES BALANCE) */}
+              <div className="p-4 bg-canvas-light dark:bg-canvas-dark rounded-input border border-border-light dark:border-border-dark flex items-center justify-between shadow-sm">
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark block">
-                    Available Balance
+                    {isWorker ? "Specialist Standing" : "Account Verification"}
                   </span>
-                  <span className="text-lg font-mono font-bold text-foreground-light dark:text-foreground-dark">
-                    ₹{balance}
-                  </span>
+                  <div className="flex items-center gap-2 mt-1">
+                    {isWorker ? (
+                      <>
+                        <span className="text-sm font-bold text-amber-500 font-mono flex items-center gap-1">
+                          ★ {rating}
+                        </span>
+                        <span className="text-xs text-muted-light dark:text-muted-dark font-medium">
+                          • {tier} ({tasksCompleted} completed)
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-xs font-semibold text-foreground-light dark:text-foreground-dark">
+                        Verified Identity
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <Link
-                  href="/client/settings/billing"
-                  className="px-3 py-1.5 rounded-pill bg-foreground-light dark:bg-foreground-dark text-canvas-light dark:text-canvas-dark text-xs font-semibold hover:opacity-90 transition-opacity"
+                <span
+                  className={`px-2.5 py-1 rounded-pill text-[10px] font-bold uppercase tracking-wider ${
+                    standing === "good"
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                      : "bg-amber-500/10 text-amber-600 border border-amber-500/20"
+                  }`}
                 >
-                  Deposit
-                </Link>
+                  {standing}
+                </span>
               </div>
 
-              {/* Main Navigation Links */}
+              {/* MAIN NAVIGATION */}
               <div className="space-y-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark px-2 block mb-1">
-                  Navigation
+                  General
                 </span>
                 <Link
                   href="/dashboard"
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                  className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
                 >
                   <span>📊</span> Workspace Hub
                 </Link>
                 <Link
-                  href="/client/post-job"
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                  href="/profile"
+                  className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold text-blue-600 dark:text-blue-400 hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
                 >
-                  <span>✨</span> Post a New Task
+                  <span>👤</span> Personal Profile
+                </Link>
+                <Link
+                  href="/leaderboard"
+                  className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                >
+                  <span className="flex items-center gap-3">
+                    <span>🏆</span> Leaderboard
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-pill bg-blue-500/10 text-blue-500 font-semibold">
+                    Soon
+                  </span>
+                </Link>
+                <Link
+                  href="/community"
+                  className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                >
+                  <span className="flex items-center gap-3">
+                    <span>💬</span> Community
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-pill bg-purple-500/10 text-purple-500 font-semibold">
+                    Soon
+                  </span>
                 </Link>
               </div>
 
-              {/* Specialist Management */}
+              {/* SPECIALIST SECTION */}
               <div className="space-y-1 pt-2 border-t border-border-light dark:border-border-dark">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark px-2 block mb-1">
                   Specialist Radar
@@ -218,7 +269,7 @@ export default function Header() {
                   <>
                     <Link
                       href="/worker/dashboard"
-                      className="flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                      className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
                     >
                       <span className="flex items-center gap-3">
                         <span>📡</span> Live Gig Radar
@@ -227,7 +278,7 @@ export default function Header() {
                     </Link>
                     <Link
                       href="/worker/settings/payouts"
-                      className="flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors text-blue-600 dark:text-blue-400"
+                      className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
                     >
                       <span className="flex items-center gap-3">
                         <span>🏦</span> Payout & KYC Settings
@@ -242,26 +293,25 @@ export default function Header() {
                 ) : (
                   <Link
                     href="/worker/onboarding"
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 transition-colors"
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 transition-colors"
                   >
                     <span>⚡</span> Become a Specialist →
                   </Link>
                 )}
               </div>
 
-              {/* Billing & Policies */}
+              {/* BILLING & INVOICES */}
               <div className="space-y-1 pt-2 border-t border-border-light dark:border-border-dark">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark px-2 block mb-1">
-                  Billing & Protection
+                  Payments
                 </span>
                 <Link
                   href="/client/settings/billing"
                   className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-muted-light dark:text-muted-dark hover:text-foreground-light dark:hover:text-foreground-dark transition-colors"
                 >
-                  <span>🧾</span> Past Invoices & Receipts
+                  <span>💳</span> Payment & Billing
                 </Link>
               </div>
-
             </div>
 
             {/* Logout Action */}
@@ -276,7 +326,6 @@ export default function Header() {
                 Sign Out
               </button>
             </div>
-
           </div>
         </div>
       )}
