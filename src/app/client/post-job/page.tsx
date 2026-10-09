@@ -19,6 +19,7 @@ const loadRazorpayScript = (): Promise<boolean> => {
   });
 };
 
+// FULL 11-CATEGORY TAXONOMY PRESERVED
 const CATEGORY_MAP: Record<string, string[]> = {
   "Code Review": [
     "Android Development", "Angular", "Api Development", "Aspnet Mvc", "Blazor", "C", "Clojure", "Cobol", "Code Review", "Codeigniter", "CPP", "Csharp", "Dart", "Debugging", "Design Patterns", "Django", "Dotnet", "Dotnet Core", "Elixir", "Expressjs", "Fastapi", "Flask", "Flutter", "Fortran", "Gatsby", "GIT", "GO", "Graphql", "Groovy", "Grpc", "Haskell", "Integration Testing", "Ionic", "Ios Development", "Java", "Javascript", "Jetpack Compose", "Kotlin", "Laravel", "LUA", "Matlab", "Nestjs", "Nextjs", "Nodejs", "Nuxtjs", "Objective C", "OOP", "Performance Tuning Code", "Perl", "PHP", "Python", "R", "Rails", "React", "React Native", "Refactoring", "Regular Expressions", "Remix", "Rest Api", "Ruby", "Rust", "Scala", "Solidity", "Spring Boot", "Svelte", "Swift", "Swiftui", "Symfony", "TDD", "Typescript", "Unit Testing", "Vbnet", "Vuejs", "Webhooks", "Websockets", "Xamarin"
@@ -55,6 +56,64 @@ const CATEGORY_MAP: Record<string, string[]> = {
   ]
 };
 
+interface JtbdPreset {
+  label: string;
+  title: string;
+  description: string;
+  suggestedBudget: number;
+  timeLimit: string;
+  defaultSkills: string[];
+}
+
+const OPTIONAL_TEMPLATES: Record<string, JtbdPreset[]> = {
+  "Code Review": [
+    {
+      label: "🔒 Security & Auth Audit",
+      title: "Security & Authentication Review",
+      description: "Perform a thorough review of our auth flow, token handling, session management, and route protections. Highlight any vulnerabilities and recommend concrete fixes.",
+      suggestedBudget: 2000,
+      timeLimit: "3",
+      defaultSkills: ["Code Review", "Typescript", "Nextjs", "Debugging"],
+    },
+    {
+      label: "⚡ Pull Request Review",
+      title: "PR Architecture & Logic Audit",
+      description: "Review pending PR code changes for clean coding standards, edge cases, error handling, and performance regressions.",
+      suggestedBudget: 1200,
+      timeLimit: "2",
+      defaultSkills: ["Code Review", "GIT", "Refactoring", "Unit Testing"],
+    },
+  ],
+  "Content & Copy": [
+    {
+      label: "✍️ Landing Page Copy",
+      title: "High-Converting Landing Page Copywriting",
+      description: "Write clear, customer-centric value propositions, hero headlines, feature summaries, and conversion CTAs.",
+      suggestedBudget: 1800,
+      timeLimit: "3",
+      defaultSkills: ["Copywriting", "Content Strategy", "Editing"],
+    },
+    {
+      label: "🔍 Proofreading & Polish",
+      title: "Professional Editing & Proofreading",
+      description: "Review and polish an existing draft to elevate tone, clarity, grammar, and engagement.",
+      suggestedBudget: 800,
+      timeLimit: "2",
+      defaultSkills: ["Proofreading", "Content Audit", "Copy Editing"],
+    },
+  ],
+  "Design": [
+    {
+      label: "🎨 UI Screen Polish",
+      title: "UI Design & Component Hierarchy Polish",
+      description: "Review existing UI frames in Figma and elevate typography, spacing rhythm, and visual polish.",
+      suggestedBudget: 2000,
+      timeLimit: "3",
+      defaultSkills: ["Ui Design", "Ux Design", "Figma"],
+    },
+  ],
+};
+
 export default function PostJobPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -62,19 +121,22 @@ export default function PostJobPage() {
   const [posterId, setPosterId] = useState<string | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
 
+  // Form States
+  const [category, setCategory] = useState<string>("Code Review");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [baseBudget, setBaseBudget] = useState("");
-  const [timeLimit, setTimeLimit] = useState("2");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const [category, setCategory] = useState<string>("Code Review");
+  const [baseBudget, setBaseBudget] = useState("1000");
+  const [timeLimit, setTimeLimit] = useState("3");
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+
+  // Skill Search & Custom Skill Addition States
   const [skillSearchQuery, setSkillSearchQuery] = useState("");
+  const [showFullSkillCatalog, setShowFullSkillCatalog] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const hourOptions = Array.from({ length: 47 }, (_, i) => i + 2);
 
-  // 1. Authenticate user on mount
+  // Authenticate user on mount
   useEffect(() => {
     async function checkClientAuth() {
       const {
@@ -91,10 +153,23 @@ export default function PostJobPage() {
     checkClientAuth();
   }, [router, supabase]);
 
+  // When category changes, reset skill query
   const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setCategory(e.target.value);
-    setSelectedSkills([]);
+    const newCat = e.target.value;
+    setCategory(newCat);
     setSkillSearchQuery("");
+  };
+
+  // Optional: Apply Preset Template
+  const applyPreset = (preset: JtbdPreset) => {
+    setTitle(preset.title);
+    setDescription(preset.description);
+    setBaseBudget(preset.suggestedBudget.toString());
+    setTimeLimit(preset.timeLimit);
+
+    // Merge skills uniquely
+    const merged = Array.from(new Set([...selectedSkills, ...preset.defaultSkills]));
+    setSelectedSkills(merged);
   };
 
   const toggleSkill = (skill: string) => {
@@ -105,23 +180,36 @@ export default function PostJobPage() {
     }
   };
 
+  // Handle adding custom skills on the fly
+  const handleAddCustomSkill = () => {
+    const trimmed = skillSearchQuery.trim();
+    if (!trimmed) return;
+
+    if (!selectedSkills.some((s) => s.toLowerCase() === trimmed.toLowerCase())) {
+      setSelectedSkills([...selectedSkills, trimmed]);
+    }
+    setSkillSearchQuery("");
+  };
+
+  // Zomato-style Billing Calculation (30% Platform & Tax Overhead)
   const parsedBudget = parseFloat(baseBudget) || 0;
-  const platformFee = Math.round(parsedBudget * 0.30);
-  const finalEscrow = parsedBudget + platformFee;
+  const platformFee = Math.round(parsedBudget * 0.12); // 12% Handling
+  const cgst = Math.round(parsedBudget * 0.09);        // 9% CGST
+  const sgst = Math.round(parsedBudget * 0.09);        // 9% SGST
+  const totalPayable = parsedBudget + platformFee + cgst + sgst;
 
   const handlePostGig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!posterId) {
-      alert("Please sign in before posting a gig.");
       router.push("/login");
       return;
     }
     if (parsedBudget < 500) {
-      alert("Minimum base budget is ₹500");
+      alert("Minimum task budget is ₹500");
       return;
     }
     if (selectedSkills.length === 0) {
-      alert("Please select at least one required skill.");
+      alert("Please specify or select at least one relevant skill for the specialist.");
       return;
     }
 
@@ -129,8 +217,8 @@ export default function PostJobPage() {
 
     const payload = {
       posterId,
-      title: title.trim(),
-      description: description.trim(),
+      title: title.trim() || `${category} Task`,
+      description: description.trim() || `Execution required for ${category}`,
       baseBudget: parsedBudget,
       timeLimit: Number(timeLimit),
       category,
@@ -138,7 +226,7 @@ export default function PostJobPage() {
     };
 
     try {
-      // 1. Create the Escrow Hold order and persist gig to Supabase
+      // 1. Initialize Protected Escrow Hold in Supabase
       const response = await fetch("/api/escrow/create-hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -148,32 +236,52 @@ export default function PostJobPage() {
       const data = await response.json();
 
       if (!response.ok || !data.orderId || !data.gigId) {
-        alert(data.error || "Failed to initialize escrow hold.");
+        alert(data.error || "Unable to initialize payment authorization.");
         setIsSubmitting(false);
         return;
       }
 
-      // 2. Load the Razorpay SDK
+      // 2. Load Razorpay SDK
       const scriptLoaded = await loadRazorpayScript();
       if (!scriptLoaded) {
-        alert("Razorpay checkout failed to load. Please verify your internet connection.");
+        alert("Payment gateway failed to load. Please verify your connection.");
         setIsSubmitting(false);
         return;
       }
 
-      // 3. Open Checkout Modal
+      // 3. Open Checkout Modal with UPI & QR prioritized upfront
       const options = {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: data.amount,
         currency: "INR",
         name: "Humynity",
-        description: `Escrow Hold: ${title}`,
+        description: `Payment Hold: ${title || `${category} Task`}`,
         order_id: data.orderId,
+        config: {
+          display: {
+            blocks: {
+              upi: {
+                name: "Pay via UPI / QR Code",
+                instruments: [{ method: "upi" }],
+              },
+              other: {
+                name: "Cards & Netbanking",
+                instruments: [
+                  { method: "card" },
+                  { method: "netbanking" },
+                  { method: "wallet" },
+                ],
+              },
+            },
+            sequence: ["block.upi", "block.other"],
+            preferences: {
+              show_default_blocks: true,
+            },
+          },
+        },
         handler: async function (paymentResponse: any) {
-          console.log("[Payment Authorized] ID:", paymentResponse.razorpay_payment_id);
-
           try {
-            // Trigger Wave Dispatcher and save razorpay_payment_id
+            // Trigger matching dispatcher
             const dispatchRes = await fetch("/api/dispatch", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -187,10 +295,8 @@ export default function PostJobPage() {
             });
 
             if (dispatchRes.ok) {
-              // Redirect using real database UUID
               router.push(`/client/radar?gigId=${data.gigId}`);
             } else {
-              alert("Payment authorized, but candidate dispatch encountered an error.");
               router.push(`/client/radar?gigId=${data.gigId}`);
             }
           } catch (error) {
@@ -214,7 +320,7 @@ export default function PostJobPage() {
       paymentObject.open();
     } catch (error) {
       console.error("Checkout Error:", error);
-      alert("An unexpected error occurred during checkout.");
+      alert("An unexpected error occurred during authorization.");
       setIsSubmitting(false);
     }
   };
@@ -225,61 +331,112 @@ export default function PostJobPage() {
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-foreground-light dark:border-foreground-dark border-t-transparent rounded-full animate-spin" />
           <p className="text-xs uppercase tracking-wider text-muted-light dark:text-muted-dark font-medium">
-            Verifying Client Session...
+            Verifying Session...
           </p>
         </div>
       </div>
     );
   }
 
-  const currentSkills = CATEGORY_MAP[category] || [];
-  const filteredSkills = currentSkills.filter((skill) =>
-    skill.toLowerCase().includes(skillSearchQuery.toLowerCase())
+  const categorySkills = CATEGORY_MAP[category] || [];
+  const filteredCategorySkills = categorySkills.filter((s) =>
+    s.toLowerCase().includes(skillSearchQuery.toLowerCase())
   );
+  const isExactSkillMatch = categorySkills.some(
+    (s) => s.toLowerCase() === skillSearchQuery.trim().toLowerCase()
+  );
+  const currentCategoryTemplates = OPTIONAL_TEMPLATES[category] || [];
 
   return (
-    <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#363638_1px,transparent_1px)] [background-size:24px_24px] py-12 px-6 text-foreground-light dark:text-foreground-dark relative">
+    <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark py-12 px-6 text-foreground-light dark:text-foreground-dark relative">
       <div className="max-w-[1040px] mx-auto relative z-10">
-        <div className="mb-10">
-          <h1 className="text-4xl font-semibold tracking-display mb-2">Create New Gig</h1>
-          <p className="text-muted-light dark:text-muted-dark tracking-body text-sm">
-            Specify your task requirements. Our algorithm targets specialists with an 85%+ skill match.
+
+        {/* HEADER */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold tracking-tight mb-2">Get Work Done</h1>
+          <p className="text-muted-light dark:text-muted-dark text-sm">
+            Define your task requirements. A verified domain specialist will accept and deliver with quality protection.
           </p>
         </div>
 
         <form onSubmit={handlePostGig} className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          <div className="lg:col-span-8 space-y-8 bg-surface-light/80 dark:bg-surface-dark/80 backdrop-blur-md p-8 rounded-panel border border-border-light dark:border-border-dark">
+
+          {/* LEFT COLUMN: TASK DETAILS */}
+          <div className="lg:col-span-8 space-y-6 bg-surface-light dark:bg-surface-dark p-8 rounded-panel border border-border-light dark:border-border-dark shadow-sm">
+
+            {/* DOMAIN CATEGORY */}
             <div className="space-y-2">
-              <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
-                Gig Title
+              <label className="block text-xs font-semibold uppercase tracking-wider text-muted-light dark:text-muted-dark">
+                Project Domain
+              </label>
+              <select
+                value={category}
+                onChange={handleCategoryChange}
+                className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors font-medium text-sm"
+              >
+                {Object.keys(CATEGORY_MAP).map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* OPTIONAL TEMPLATES (ACCELERATORS) */}
+            {currentCategoryTemplates.length > 0 && (
+              <div className="space-y-2 pt-1">
+                <span className="text-xs text-muted-light dark:text-muted-dark">
+                  Need a starting point? (Optional):
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {currentCategoryTemplates.map((template) => (
+                    <button
+                      key={template.label}
+                      type="button"
+                      onClick={() => applyPreset(template)}
+                      className="px-3.5 py-1.5 rounded-pill text-xs font-medium border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark hover:border-blue-500 transition-colors"
+                    >
+                      {template.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* TASK TITLE */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-muted-light dark:text-muted-dark">
+                Task Title
               </label>
               <input
                 type="text"
-                placeholder="e.g. Code Review for Next.js Authentication"
+                placeholder="e.g. Next.js Auth Review, Custom Python Scraper, or Translation"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 required
-                className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors placeholder:text-muted-light dark:placeholder:text-muted-dark"
+                className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors placeholder:text-muted-light dark:placeholder:text-muted-dark text-sm"
               />
             </div>
 
+            {/* DESCRIPTION */}
             <div className="space-y-2">
-              <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
-                Detailed Description
+              <label className="block text-xs font-semibold uppercase tracking-wider text-muted-light dark:text-muted-dark">
+                Task Requirements & Scope
               </label>
               <textarea
-                placeholder="Detail exactly what you need done..."
+                placeholder="Describe what needs to be delivered, edge cases to watch for, links, or specific acceptance criteria..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 required
-                className="w-full min-h-[160px] p-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors placeholder:text-muted-light dark:placeholder:text-muted-dark resize-y"
+                className="w-full min-h-[140px] p-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors placeholder:text-muted-light dark:placeholder:text-muted-dark text-sm resize-y"
               />
             </div>
 
+            {/* BUDGET & TIME */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
-                  Base Budget (₹)
+                <label className="block text-xs font-semibold uppercase tracking-wider text-muted-light dark:text-muted-dark">
+                  Specialist Budget (₹)
                 </label>
                 <div className="relative">
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-light dark:text-muted-dark">
@@ -287,25 +444,27 @@ export default function PostJobPage() {
                   </span>
                   <input
                     type="number"
-                    placeholder="500"
                     value={baseBudget}
                     onChange={(e) => setBaseBudget(e.target.value)}
                     required
                     min="500"
-                    className="w-full h-12 pl-8 pr-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors placeholder:text-muted-light dark:placeholder:text-muted-dark"
+                    className="w-full h-12 pl-8 pr-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors text-sm font-semibold"
                   />
                 </div>
+                <span className="text-[11px] text-muted-light dark:text-muted-dark">
+                  Minimum platform task: ₹500
+                </span>
               </div>
 
               <div className="space-y-2">
-                <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
-                  Estimated Effort (Hours)
+                <label className="block text-xs font-semibold uppercase tracking-wider text-muted-light dark:text-muted-dark">
+                  Expected Delivery Window
                 </label>
                 <select
                   value={timeLimit}
                   onChange={(e) => setTimeLimit(e.target.value)}
                   required
-                  className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors text-foreground-light dark:text-foreground-dark"
+                  className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors text-sm font-medium"
                 >
                   {hourOptions.map((hour) => (
                     <option key={hour} value={hour}>
@@ -316,114 +475,164 @@ export default function PostJobPage() {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-border-light dark:border-border-dark space-y-6">
-              <div className="space-y-2">
-                <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
-                  Project Category
+            {/* SKILLS SECTION: AUTOSCOPED + CUSTOM SKILL CAPABILITY */}
+            <div className="pt-4 border-t border-border-light dark:border-border-dark space-y-3">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-semibold uppercase tracking-wider text-muted-light dark:text-muted-dark">
+                  Required Specialist Skills ({selectedSkills.length} selected)
                 </label>
-                <select
-                  value={category}
-                  onChange={handleCategoryChange}
-                  className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors text-foreground-light dark:text-foreground-dark"
+                <button
+                  type="button"
+                  onClick={() => setShowFullSkillCatalog(!showFullSkillCatalog)}
+                  className="text-xs font-semibold text-blue-600 hover:underline"
                 >
-                  {Object.keys(CATEGORY_MAP).map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
+                  {showFullSkillCatalog ? "Close Skill Browser" : "Browse All Skills"}
+                </button>
               </div>
 
-              <div className="space-y-4">
-                <div className="flex justify-between items-end">
-                  <label className="block text-xs font-medium uppercase tracking-wide text-muted-light dark:text-muted-dark">
-                    Required Skills
-                  </label>
-                  <span className="text-xs text-muted-light dark:text-muted-dark">
-                    {selectedSkills.length} selected
+              {/* Selected Pills */}
+              <div className="flex flex-wrap gap-2 min-h-[36px] p-2 bg-canvas-light dark:bg-canvas-dark rounded-input border border-border-light dark:border-border-dark">
+                {selectedSkills.length === 0 ? (
+                  <span className="text-xs text-muted-light dark:text-muted-dark italic self-center">
+                    No skills attached yet. Type below or browse the catalog.
                   </span>
-                </div>
+                ) : (
+                  selectedSkills.map((skill) => (
+                    <span
+                      key={skill}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-pill bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark text-xs font-medium"
+                    >
+                      {skill}
+                      <button
+                        type="button"
+                        onClick={() => toggleSkill(skill)}
+                        className="hover:opacity-75 text-sm leading-none ml-1"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
 
+              {/* Search or Add Custom Skill Input */}
+              <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder={`Search ${category} skills...`}
+                  placeholder={`Search ${category} skills or type custom skill...`}
                   value={skillSearchQuery}
                   onChange={(e) => setSkillSearchQuery(e.target.value)}
-                  className="w-full h-10 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark transition-colors placeholder:text-muted-light dark:placeholder:text-muted-dark text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddCustomSkill();
+                    }
+                  }}
+                  className="flex-1 h-10 px-3 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark text-xs"
                 />
+                {skillSearchQuery.trim() && !isExactSkillMatch && (
+                  <button
+                    type="button"
+                    onClick={handleAddCustomSkill}
+                    className="px-4 h-10 rounded-input bg-blue-600 text-white text-xs font-semibold hover:bg-blue-500 transition-colors whitespace-nowrap"
+                  >
+                    + Add &quot;{skillSearchQuery.trim()}&quot;
+                  </button>
+                )}
+              </div>
 
-                <div className="flex flex-wrap gap-2 max-h-[200px] overflow-y-auto pr-2 pb-2">
-                  {filteredSkills.length > 0 ? (
-                    filteredSkills.map((skill) => {
+              {/* Category Skill Search Matches / Full Catalog */}
+              {(skillSearchQuery.trim() || showFullSkillCatalog) && (
+                <div className="p-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark space-y-2 animate-in fade-in">
+                  <div className="flex justify-between items-center text-[11px] text-muted-light dark:text-muted-dark">
+                    <span>
+                      {skillSearchQuery.trim()
+                        ? `Matches in ${category}:`
+                        : `All ${category} Skills (${categorySkills.length}):`}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 max-h-[160px] overflow-y-auto pr-1">
+                    {filteredCategorySkills.map((skill) => {
                       const isSelected = selectedSkills.includes(skill);
                       return (
                         <button
                           key={skill}
                           type="button"
                           onClick={() => toggleSkill(skill)}
-                          className={`h-9 px-4 rounded-pill text-sm font-medium transition-colors border flex-shrink-0 ${
+                          className={`px-2.5 py-1 rounded-pill text-[11px] font-medium transition-colors border ${
                             isSelected
-                              ? "bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark border-transparent"
-                              : "bg-canvas-light dark:bg-canvas-dark text-foreground-light dark:text-foreground-dark border-border-light dark:border-border-dark hover:bg-surface-light dark:hover:bg-surface-dark"
+                              ? "bg-blue-600 text-white border-blue-600"
+                              : "border-border-light dark:border-border-dark hover:bg-surface-light dark:hover:bg-surface-dark"
                           }`}
                         >
-                          {skill}
+                          {skill} {isSelected ? "✓" : "+"}
                         </button>
                       );
-                    })
-                  ) : (
-                    <p className="text-sm text-muted-light dark:text-muted-dark italic p-2">
-                      No skills found matching &quot;{skillSearchQuery}&quot;.
-                    </p>
-                  )}
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
 
+          {/* RIGHT COLUMN: ZOMATO-STYLE BILL BREAKDOWN */}
           <div className="lg:col-span-4">
-            <div className="sticky top-6 bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md rounded-panel border border-border-light dark:border-border-dark p-6 shadow-sm">
-              <h2 className="text-xl font-semibold mb-6">Gig Summary</h2>
-
-              <div className="space-y-0">
-                <div className="flex justify-between items-center py-4 border-b border-border-light dark:border-border-dark">
-                  <span className="text-sm text-muted-light dark:text-muted-dark">Algorithm Match</span>
-                  <span className="text-sm font-medium">Strict (85%+)</span>
-                </div>
-
-                <div className="flex justify-between items-center py-4 border-b border-border-light dark:border-border-dark">
-                  <span className="text-sm text-muted-light dark:text-muted-dark">Base Budget</span>
-                  <span className="text-sm font-medium">₹{parsedBudget.toFixed(2)}</span>
-                </div>
-
-                <div className="flex justify-between items-center py-4 border-b border-border-light dark:border-border-dark">
-                  <span className="text-sm text-muted-light dark:text-muted-dark">Platform Fee (30%)</span>
-                  <span className="text-sm font-medium">₹{platformFee.toFixed(2)}</span>
-                </div>
-
-                <div className="flex justify-between items-center py-6">
-                  <span className="text-sm text-muted-light dark:text-muted-dark">Total Escrow</span>
-                  <span className="text-3xl font-semibold tracking-display">
-                    ₹{finalEscrow.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3 p-4 mb-6 bg-canvas-light dark:bg-canvas-dark rounded-input border border-border-light dark:border-border-dark">
-                <svg className="w-5 h-5 flex-shrink-0 mt-0.5 text-muted-light dark:text-muted-dark" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-                <p className="text-[13px] text-muted-light dark:text-muted-dark leading-relaxed">
-                  Funds are held securely. You only release payment upon final approval of watermarked files.
+            <div className="sticky top-6 bg-surface-light dark:bg-surface-dark rounded-panel border border-border-light dark:border-border-dark p-6 shadow-sm space-y-6">
+              <div>
+                <h2 className="text-lg font-bold">Payment Details</h2>
+                <p className="text-xs text-muted-light dark:text-muted-dark mt-0.5">
+                  Itemized summary for your task authorization.
                 </p>
               </div>
 
+              {/* ITEMIZATION */}
+              <div className="space-y-3 text-xs border-t border-b border-border-light dark:border-border-dark py-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-light dark:text-muted-dark">Specialist Reward</span>
+                  <span className="font-medium font-mono">₹{parsedBudget.toFixed(2)}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-light dark:text-muted-dark">Platform & Quality Handling</span>
+                  <span className="font-medium font-mono">₹{platformFee.toFixed(2)}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-light dark:text-muted-dark">Central GST (CGST 9%)</span>
+                  <span className="font-medium font-mono">₹{cgst.toFixed(2)}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-light dark:text-muted-dark">State GST (SGST 9%)</span>
+                  <span className="font-medium font-mono">₹{sgst.toFixed(2)}</span>
+                </div>
+
+                <div className="flex justify-between items-center pt-3 border-t border-dashed border-border-light dark:border-border-dark text-sm font-bold">
+                  <span>Total Amount Payable</span>
+                  <span className="font-mono text-base">₹{totalPayable.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* REASSURANCE BADGE */}
+              <div className="p-3.5 bg-canvas-light dark:bg-canvas-dark rounded-input border border-border-light dark:border-border-dark space-y-1.5 text-xs text-muted-light dark:text-muted-dark">
+                <div className="flex items-center gap-1.5 font-semibold text-foreground-light dark:text-foreground-dark">
+                  <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                  <span>100% Protected Payment Hold</span>
+                </div>
+                <p className="leading-relaxed">
+                  Funds remain safely held. You only release payment once you review and approve the watermarked delivery.
+                </p>
+              </div>
+
+              {/* ACTION BUTTON */}
               <button
                 type="submit"
                 disabled={isSubmitting || parsedBudget < 500 || selectedSkills.length === 0}
-                className="w-full h-12 rounded-pill bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark font-medium transition-transform active:scale-[0.985] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full h-12 rounded-pill bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark font-semibold text-sm transition-transform active:scale-[0.985] disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
               >
-                {isSubmitting ? "Securing Escrow..." : "Deposit & Find Workers"}
+                {isSubmitting ? "Securing Authorization..." : "Authorize & Match Specialist"}
               </button>
             </div>
           </div>

@@ -4,6 +4,13 @@ import { useEffect, useState, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
+const SEARCH_STATUS_MESSAGES = [
+  "Searching for verified specialists in your domain...",
+  "Reviewing specialist availability and workload...",
+  "Selecting the best match for your task...",
+  "Sending priority task invitation to specialist...",
+];
+
 function RadarContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -11,23 +18,36 @@ function RadarContent() {
   const supabase = createClient();
 
   const [totalTimeLeft, setTotalTimeLeft] = useState(300); // 5-minute search window
+  const [statusMessageIndex, setStatusMessageIndex] = useState(0);
   const [isExhausted, setIsExhausted] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
   const [matchedWorker, setMatchedWorker] = useState(false);
   const [resolvedUuid, setResolvedUuid] = useState<string | null>(null);
+
+  // In-app Modal & Action States
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const isOrderId = typeof gigId === "string" && gigId.startsWith("order_");
 
   const handleMatchedTransition = useCallback(
     (realUuid: string) => {
-      console.log("[Client Radar] Specialist match confirmed! Routing to client workspace:", realUuid);
       setMatchedWorker(true);
       setTimeout(() => {
         router.push(`/client/workspace/${realUuid}`);
-      }, 700);
+      }, 900);
     },
     [router]
   );
+
+  // Cycle status messages gently while client waits
+  useEffect(() => {
+    if (matchedWorker || isExhausted) return;
+    const interval = setInterval(() => {
+      setStatusMessageIndex((prev) => (prev + 1) % SEARCH_STATUS_MESSAGES.length);
+    }, 4500);
+    return () => clearInterval(interval);
+  }, [matchedWorker, isExhausted]);
 
   useEffect(() => {
     if (!gigId) return;
@@ -111,7 +131,7 @@ function RadarContent() {
     };
   }, [gigId, isOrderId, handleMatchedTransition, supabase]);
 
-  // Countdown clock
+  // 5-Minute Countdown clock
   useEffect(() => {
     if (totalTimeLeft <= 0) {
       setIsExhausted(true);
@@ -125,15 +145,14 @@ function RadarContent() {
     return () => clearInterval(timer);
   }, [totalTimeLeft]);
 
-  const handleCancelGig = async () => {
+  // In-app cancellation handler
+  const handleConfirmCancel = async () => {
     const targetId = resolvedUuid || gigId;
     if (!targetId) return;
 
-    if (!window.confirm("Cancel this gig and initiate a full escrow refund?")) {
-      return;
-    }
-
     setCancelling(true);
+    setCancelError(null);
+
     try {
       const res = await fetch("/api/workspace/review", {
         method: "POST",
@@ -143,14 +162,14 @@ function RadarContent() {
 
       const data = await res.json();
       if (res.ok) {
-        alert(data.message || "Gig cancelled. Escrow refund initiated.");
-        router.push("/dashboard");
+        setShowCancelModal(false);
+        setIsExhausted(true);
       } else {
-        alert(data.error || "Failed to cancel gig.");
+        setCancelError(data.error || "Failed to cancel task. Please try again.");
       }
     } catch (err) {
-      console.error("[Cancel Gig Error]:", err);
-      alert("A network error occurred while cancelling.");
+      console.error("[Cancel Task Error]:", err);
+      setCancelError("Network error. Please check your connection.");
     } finally {
       setCancelling(false);
     }
@@ -165,85 +184,154 @@ function RadarContent() {
   if (!gigId) {
     return (
       <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark flex items-center justify-center p-6 text-foreground-light dark:text-foreground-dark">
-        <p className="text-sm text-muted-light dark:text-muted-dark">No task ID provided.</p>
+        <p className="text-sm text-muted-light dark:text-muted-dark">No task ID found in session.</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark flex items-center justify-center p-6 text-foreground-light dark:text-foreground-dark">
-      <div className="w-full max-w-md bg-surface-light dark:bg-surface-dark rounded-panel p-8 shadow-xl border border-border-light dark:border-border-dark text-center">
+    <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark flex items-center justify-center p-6 text-foreground-light dark:text-foreground-dark relative">
+      <div className="w-full max-w-md bg-surface-light dark:bg-surface-dark rounded-panel p-8 shadow-xl border border-border-light dark:border-border-dark text-center relative z-10">
+
+        {/* STATE 1: SPECIALISTS AT CAPACITY / CANCELLED / REFUNDED */}
         {isExhausted ? (
-          <div className="space-y-6 animate-in fade-in">
-            <div className="w-16 h-16 mx-auto bg-red-500/10 text-red-500 flex items-center justify-center rounded-full mb-4">
+          <div className="space-y-6 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-16 h-16 mx-auto bg-amber-500/10 text-amber-500 flex items-center justify-center rounded-full">
               <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <h2 className="text-2xl font-bold">Network Exhausted</h2>
-            <p className="text-muted-light dark:text-muted-dark text-sm">
-              We could not find an available specialist matching your requirements within the active window.
-            </p>
-            <p className="text-xs text-muted-light dark:text-muted-dark">
-              Your escrow hold has been cancelled and a full refund has been issued.
-            </p>
+
+            <div>
+              <h2 className="text-2xl font-bold tracking-tight">Specialists Currently Busy</h2>
+              <p className="text-muted-light dark:text-muted-dark text-sm mt-2 leading-relaxed">
+                All qualified specialists in this domain are currently engaged with active tasks.
+              </p>
+            </div>
+
+            <div className="p-4 bg-canvas-light dark:bg-canvas-dark rounded-input border border-border-light dark:border-border-dark text-xs text-muted-light dark:text-muted-dark leading-relaxed text-left">
+              <p className="font-semibold text-foreground-light dark:text-foreground-dark mb-1">
+                ✓ 100% Refund Initiated
+              </p>
+              Your payment authorization has been released. The full amount is returning to your original payment method.
+            </div>
+
             <button
               onClick={() => router.push("/dashboard")}
-              className="w-full h-12 mt-4 bg-foreground-light dark:bg-foreground-dark text-canvas-light dark:text-canvas-dark rounded-pill font-medium text-sm transition-transform active:scale-95"
+              className="w-full h-12 bg-foreground-light dark:bg-foreground-dark text-canvas-light dark:text-canvas-dark rounded-pill font-medium text-sm transition-transform active:scale-95"
             >
-              Return to Dashboard
+              Return to Home
             </button>
           </div>
+
+        /* STATE 2: SPECIALIST MATCHED & ACCEPTED */
         ) : matchedWorker ? (
-          <div className="space-y-6 animate-in fade-in">
-            <div className="w-20 h-20 mx-auto bg-emerald-500/10 text-emerald-500 flex items-center justify-center rounded-full mb-4">
+          <div className="space-y-6 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-20 h-20 mx-auto bg-emerald-500/10 text-emerald-500 flex items-center justify-center rounded-full">
               <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
               </svg>
             </div>
             <div>
-              <h2 className="text-2xl font-bold mb-1">Specialist Matched!</h2>
-              <p className="text-muted-light dark:text-muted-dark text-sm">
-                An expert accepted your gig. Loading your workspace...
+              <h2 className="text-2xl font-bold tracking-tight mb-2">Specialist Assigned!</h2>
+              <p className="text-muted-light dark:text-muted-dark text-sm leading-relaxed">
+                A verified domain expert accepted your task. Opening your private workspace room...
               </p>
             </div>
+            <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" />
           </div>
+
+        /* STATE 3: SEARCHING & MATCHING (CONSUMER TRACKING VIEW) */
         ) : (
-          <div className="space-y-8 animate-in fade-in">
-            <div className="relative w-24 h-24 mx-auto bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-500/30">
-              <span className="absolute top-0 right-0 w-4 h-4 bg-green-400 border-2 border-surface-light dark:border-surface-dark rounded-full animate-pulse" />
-              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </div>
-
-            <div>
-              <h2 className="text-2xl font-bold mb-2">Broadcasting Gig...</h2>
-              <p className="text-muted-light dark:text-muted-dark text-sm">
-                Cascading dispatch to qualified specialists on Live Radar.
-              </p>
-              <span className="inline-block mt-4 px-3 py-1 bg-blue-500/10 text-blue-600 text-xs font-bold rounded-pill uppercase tracking-wider">
-                Targeting 85%+ Skill Overlap
-              </span>
-            </div>
-
-            <div className="bg-canvas-light dark:bg-canvas-dark p-4 rounded-input border border-border-light dark:border-border-dark space-y-4 text-sm text-left">
-              <div className="flex justify-between">
-                <span className="text-muted-light dark:text-muted-dark">Dispatch Window:</span>
-                <span className="font-mono font-bold text-red-500">{formatTime(totalTimeLeft)}</span>
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Animated Search Radar Icon */}
+            <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
+              <span className="absolute inset-0 rounded-full bg-blue-500/20 animate-ping" />
+              <div className="relative w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-500/30">
+                <svg className="w-9 h-9 text-white animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
               </div>
             </div>
 
+            <div>
+              <h2 className="text-2xl font-bold tracking-tight mb-2">Finding Your Specialist</h2>
+              <p className="text-muted-light dark:text-muted-dark text-sm min-h-[40px] flex items-center justify-center transition-all duration-300">
+                {SEARCH_STATUS_MESSAGES[statusMessageIndex]}
+              </p>
+            </div>
+
+            {/* Matching Window Status Card */}
+            <div className="bg-canvas-light dark:bg-canvas-dark p-4 rounded-input border border-border-light dark:border-border-dark space-y-3 text-sm text-left">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-medium uppercase tracking-wider text-muted-light dark:text-muted-dark">
+                  Matching Window
+                </span>
+                <span className="font-mono font-bold text-foreground-light dark:text-foreground-dark">
+                  {formatTime(totalTimeLeft)}
+                </span>
+              </div>
+              <p className="text-xs text-muted-light dark:text-muted-dark leading-relaxed">
+                Specialists receive exclusive windows to claim tasks based on expertise fit.
+              </p>
+            </div>
+
+            {/* Cancel Button */}
             <button
-              onClick={handleCancelGig}
-              disabled={cancelling}
-              className="w-full h-12 border border-red-500/30 text-red-500 hover:bg-red-500/10 rounded-pill font-medium text-sm transition-colors disabled:opacity-50"
+              type="button"
+              onClick={() => setShowCancelModal(true)}
+              className="w-full h-12 border border-border-light dark:border-border-dark text-muted-light dark:text-muted-dark hover:text-red-500 hover:border-red-500/30 rounded-pill font-medium text-sm transition-colors"
             >
-              {cancelling ? "Cancelling..." : "Cancel Gig & Refund"}
+              Cancel Task & Release Payment
             </button>
           </div>
         )}
       </div>
+
+      {/* CUSTOM IN-APP CANCEL CONFIRMATION MODAL (NO BROWSER ALERTS) */}
+      {showCancelModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-sm bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-panel p-6 shadow-2xl text-center space-y-5">
+            <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center mx-auto">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-bold">Cancel This Task?</h3>
+              <p className="text-xs text-muted-light dark:text-muted-dark mt-2 leading-relaxed">
+                Cancelling will halt the search and immediately release the payment hold back to your account.
+              </p>
+            </div>
+
+            {cancelError && (
+              <p className="text-xs text-red-500 bg-red-500/10 p-2 rounded-input">
+                {cancelError}
+              </p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowCancelModal(false)}
+                disabled={cancelling}
+                className="flex-1 h-11 border border-border-light dark:border-border-dark rounded-pill text-xs font-semibold hover:bg-surface-light dark:hover:bg-surface-dark transition-colors disabled:opacity-50"
+              >
+                Keep Searching
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCancel}
+                disabled={cancelling}
+                className="flex-1 h-11 bg-red-600 hover:bg-red-500 text-white rounded-pill text-xs font-semibold transition-colors disabled:opacity-50"
+              >
+                {cancelling ? "Releasing..." : "Yes, Cancel"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -253,7 +341,7 @@ export default function ClientRadarPage() {
     <Suspense
       fallback={
         <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark flex items-center justify-center text-sm text-muted-light dark:text-muted-dark">
-          Loading Radar...
+          Connecting to matching engine...
         </div>
       }
     >
