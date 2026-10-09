@@ -1,21 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 
 export default function Header() {
   const router = useRouter();
+  const pathname = usePathname();
   const supabase = createClient();
 
-  const [username, setUsername] = useState<string | null>(null);
+  const [username, setUsername] = useState<string>("User");
   const [balance, setBalance] = useState("0.00");
   const [isWorker, setIsWorker] = useState(false);
-
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [isPanVerified, setIsPanVerified] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -26,35 +25,45 @@ export default function Header() {
       } = await supabase.auth.getUser();
 
       if (user && isMounted) {
-        const defaultName = user.email ? user.email.split("@")[0] : "User";
-        setUsername(user.user_metadata?.username || defaultName);
+        // Fetch or default username
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("username")
+          .eq("id", user.id)
+          .maybeSingle();
 
+        const resolvedName =
+          profile?.username ||
+          user.user_metadata?.username ||
+          (user.email ? user.email.split("@")[0] : "User");
+
+        setUsername(resolvedName);
+
+        // Fetch worker status and KYC verification
         const { data: worker } = await supabase
           .from("workers")
-          .select("terms_accepted")
+          .select("terms_accepted, is_pan_verified")
           .eq("worker_id", user.id)
           .maybeSingle();
 
-        if (isMounted) {
-          setIsWorker(Boolean(worker?.terms_accepted));
+        if (isMounted && worker) {
+          setIsWorker(Boolean(worker.terms_accepted));
+          setIsPanVerified(Boolean(worker.is_pan_verified));
         }
       }
     };
 
     fetchUserIdentity();
 
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsProfileOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
     return () => {
       isMounted = false;
-      document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [supabase]);
+
+  // Close drawer automatically on route navigation
+  useEffect(() => {
+    setIsDrawerOpen(false);
+  }, [pathname]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -63,161 +72,214 @@ export default function Header() {
   };
 
   return (
-    <header className="w-full border-b border-border-light dark:border-border-dark bg-surface-light/80 dark:bg-surface-dark/80 backdrop-blur-md sticky top-0 z-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-
-        <Link
-          href="/dashboard"
-          className="flex items-center gap-3 font-bold tracking-display text-xl text-foreground-light dark:text-foreground-dark group"
-        >
-          <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center group-hover:scale-105 transition-transform shadow-md shadow-blue-500/20">
-            <span className="text-lg font-serif italic pr-0.5">H</span>
-          </div>
-          Humynity
-        </Link>
-
-        <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-muted-light dark:text-muted-dark">
+    <>
+      <header className="w-full border-b border-border-light dark:border-border-dark bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          
+          {/* LOGO */}
           <Link
             href="/dashboard"
-            className="hover:text-foreground-light dark:hover:text-foreground-dark transition-colors"
+            className="flex items-center gap-2.5 font-bold text-lg sm:text-xl text-foreground-light dark:text-foreground-dark group"
           >
-            Hub
+            <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
+              H
+            </div>
+            <span>Humynity</span>
           </Link>
-          <Link
-            href="/client/post-job"
-            className="hover:text-foreground-light dark:hover:text-foreground-dark transition-colors"
-          >
-            Post a Gig
-          </Link>
-          <Link
-            href={isWorker ? "/worker/dashboard" : "/worker/onboarding"}
-            className="hover:text-foreground-light dark:hover:text-foreground-dark transition-colors"
-          >
-            Live Radar
-          </Link>
-        </nav>
 
-        <div className="flex items-center gap-4">
-          {username && (
-            <div className="hidden md:flex flex-col items-end mr-2">
-              <span className="text-sm font-semibold tracking-wide text-foreground-light dark:text-foreground-dark">
+          {/* DESKTOP CORE NAV LINKS */}
+          <nav className="hidden md:flex items-center gap-6 text-xs sm:text-sm font-semibold text-muted-light dark:text-muted-dark">
+            <Link
+              href="/dashboard"
+              className={`hover:text-foreground-light dark:hover:text-foreground-dark transition-colors ${
+                pathname === "/dashboard" ? "text-blue-600 dark:text-blue-400 font-bold" : ""
+              }`}
+            >
+              Hub
+            </Link>
+            <Link
+              href="/client/post-job"
+              className={`hover:text-foreground-light dark:hover:text-foreground-dark transition-colors ${
+                pathname === "/client/post-job" ? "text-blue-600 dark:text-blue-400 font-bold" : ""
+              }`}
+            >
+              Post a Task
+            </Link>
+            <Link
+              href={isWorker ? "/worker/dashboard" : "/worker/onboarding"}
+              className={`hover:text-foreground-light dark:hover:text-foreground-dark transition-colors ${
+                pathname.startsWith("/worker") ? "text-blue-600 dark:text-blue-400 font-bold" : ""
+              }`}
+            >
+              Live Radar
+            </Link>
+          </nav>
+
+          {/* RIGHT ACTIONS: DRAWER TOGGLE (DESKTOP & MOBILE) */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsDrawerOpen(true)}
+              className="flex items-center gap-2.5 p-1.5 pl-3 rounded-pill border border-border-light dark:border-border-dark hover:border-blue-500 transition-colors bg-canvas-light/50 dark:bg-canvas-dark/50"
+              aria-label="Open Profile Menu"
+            >
+              <span className="text-xs font-semibold hidden sm:inline-block max-w-[120px] truncate">
                 @{username}
               </span>
-              <span className="text-[11px] font-medium uppercase tracking-widest text-muted-light dark:text-muted-dark mt-0.5">
-                ₹{balance} Available
-              </span>
-            </div>
-          )}
-
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setIsProfileOpen(!isProfileOpen)}
-              className="w-10 h-10 rounded-full bg-border-light dark:bg-border-dark border border-border-light dark:border-border-dark flex items-center justify-center text-foreground-light dark:text-foreground-dark hover:ring-2 ring-blue-500 transition-all"
-              aria-label="User Menu"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                />
-              </svg>
+              <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-sm">
+                {username.charAt(0).toUpperCase()}
+              </div>
             </button>
+          </div>
+        </div>
+      </header>
 
-            {isProfileOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-panel shadow-xl py-2 animate-in fade-in slide-in-from-top-2 z-50 text-xs">
-                <Link
-                  href="/dashboard"
-                  onClick={() => setIsProfileOpen(false)}
-                  className="flex items-center gap-2 px-4 py-2.5 text-foreground-light dark:text-foreground-dark hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+      {/* SLIDE-OUT PROFILE HAMBURGER DRAWER */}
+      {isDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end animate-in fade-in duration-200">
+          
+          {/* Backdrop Blur */}
+          <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setIsDrawerOpen(false)}
+          />
+
+          {/* Drawer Panel */}
+          <div className="relative w-full max-w-xs sm:max-w-sm h-full bg-surface-light dark:bg-surface-dark border-l border-border-light dark:border-border-dark p-6 shadow-2xl flex flex-col justify-between overflow-y-auto z-10 animate-in slide-in-from-right duration-250">
+            
+            <div className="space-y-6">
+              
+              {/* Drawer Header */}
+              <div className="flex justify-between items-center border-b border-border-light dark:border-border-dark pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shadow-md">
+                    {username.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm text-foreground-light dark:text-foreground-dark leading-tight">
+                      @{username}
+                    </h3>
+                    <span className="text-[11px] text-muted-light dark:text-muted-dark">
+                      {isWorker ? "Verified Specialist" : "Client Account"}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setIsDrawerOpen(false)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-muted-light dark:text-muted-dark hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
                 >
-                  📊 Dashboard Hub
-                </Link>
+                  ✕
+                </button>
+              </div>
 
-                <div className="h-px bg-border-light dark:border-border-dark my-1" />
-
-                {/* Client Section */}
-                <div className="px-4 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark">
-                  Client Account
+              {/* Discreet Wallet Balance Card */}
+              <div className="p-4 bg-canvas-light dark:bg-canvas-dark rounded-input border border-border-light dark:border-border-dark flex justify-between items-center">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark block">
+                    Available Balance
+                  </span>
+                  <span className="text-lg font-mono font-bold text-foreground-light dark:text-foreground-dark">
+                    ₹{balance}
+                  </span>
                 </div>
                 <Link
                   href="/client/settings/billing"
-                  onClick={() => setIsProfileOpen(false)}
-                  className="flex items-center gap-2 px-4 py-2 text-foreground-light dark:text-foreground-dark hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                  className="px-3 py-1.5 rounded-pill bg-foreground-light dark:bg-foreground-dark text-canvas-light dark:text-canvas-dark text-xs font-semibold hover:opacity-90 transition-opacity"
                 >
-                  💳 Payment & Billing (UPI)
+                  Deposit
                 </Link>
+              </div>
 
-                <div className="h-px bg-border-light dark:border-border-dark my-1" />
+              {/* Main Navigation Links */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark px-2 block mb-1">
+                  Navigation
+                </span>
+                <Link
+                  href="/dashboard"
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                >
+                  <span>📊</span> Workspace Hub
+                </Link>
+                <Link
+                  href="/client/post-job"
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                >
+                  <span>✨</span> Post a New Task
+                </Link>
+              </div>
 
-                {/* Specialist Section */}
-                <div className="px-4 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark">
-                  Specialist Account
-                </div>
+              {/* Specialist Management */}
+              <div className="space-y-1 pt-2 border-t border-border-light dark:border-border-dark">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark px-2 block mb-1">
+                  Specialist Radar
+                </span>
                 {isWorker ? (
                   <>
                     <Link
                       href="/worker/dashboard"
-                      onClick={() => setIsProfileOpen(false)}
-                      className="flex items-center gap-2 px-4 py-2 text-foreground-light dark:text-foreground-dark hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                      className="flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
                     >
-                      📡 Live Gig Radar
+                      <span className="flex items-center gap-3">
+                        <span>📡</span> Live Gig Radar
+                      </span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     </Link>
                     <Link
                       href="/worker/settings/payouts"
-                      onClick={() => setIsProfileOpen(false)}
-                      className="flex items-center gap-2 px-4 py-2 text-blue-600 font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                      className="flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors text-blue-600 dark:text-blue-400"
                     >
-                      🏦 Payout & KYC Settings
+                      <span className="flex items-center gap-3">
+                        <span>🏦</span> Payout & KYC Settings
+                      </span>
+                      {!isPanVerified && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-pill bg-amber-500/10 text-amber-500 font-bold">
+                          Pending
+                        </span>
+                      )}
                     </Link>
                   </>
                 ) : (
                   <Link
                     href="/worker/onboarding"
-                    onClick={() => setIsProfileOpen(false)}
-                    className="flex items-center gap-2 px-4 py-2 text-blue-600 font-semibold hover:bg-canvas-light dark:hover:bg-canvas-dark transition-colors"
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 transition-colors"
                   >
-                    ⚡ Activate Specialist Profile →
+                    <span>⚡</span> Become a Specialist →
                   </Link>
                 )}
-
-                <div className="h-px bg-border-light dark:border-border-dark my-1" />
-
-                <button
-                  onClick={handleLogout}
-                  className="w-full flex items-center gap-2 px-4 py-2 text-red-500 hover:bg-red-500/10 transition-colors text-left"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                    />
-                  </svg>
-                  Logout
-                </button>
               </div>
-            )}
-          </div>
 
-          <button
-            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="md:hidden text-foreground-light dark:text-foreground-dark"
-            aria-label="Toggle Navigation Menu"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                d={isMobileMenuOpen ? "M6 18L18 6M6 6l12 12" : "M4 6h16M4 12h16m-7 6h7"}
-              />
-            </svg>
-          </button>
+              {/* Billing & Policies */}
+              <div className="space-y-1 pt-2 border-t border-border-light dark:border-border-dark">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-light dark:text-muted-dark px-2 block mb-1">
+                  Billing & Protection
+                </span>
+                <Link
+                  href="/client/settings/billing"
+                  className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-muted-light dark:text-muted-dark hover:text-foreground-light dark:hover:text-foreground-dark transition-colors"
+                >
+                  <span>🧾</span> Past Invoices & Receipts
+                </Link>
+              </div>
+
+            </div>
+
+            {/* Logout Action */}
+            <div className="pt-6 border-t border-border-light dark:border-border-dark">
+              <button
+                onClick={handleLogout}
+                className="w-full h-11 flex items-center justify-center gap-2 rounded-pill border border-red-500/20 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                Sign Out
+              </button>
+            </div>
+
+          </div>
         </div>
-      </div>
-    </header>
+      )}
+    </>
   );
 }

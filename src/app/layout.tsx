@@ -1,10 +1,16 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import AppLayout from "@/components/AppLayout"; // <-- Imported here
+import AppLayout from "@/components/AppLayout";
 
 export const metadata: Metadata = {
-  title: "AnonGig | Anonymous Marketplace",
-  description: "The secure, zero-bias platform where top talent meets urgent tasks.",
+  title: "Humynity | Verified Talent & Protected Escrow",
+  description: "Frictionless task delegation. Verified human execution with protected payment hold.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({
@@ -14,11 +20,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="antialiased text-foreground-light bg-canvas-light dark:text-foreground-dark dark:bg-canvas-dark">
-        {/* Wrapping the entire app in your new Auth Guard & Layout */}
-        <AppLayout>
-          {children}
-        </AppLayout>
+      <body className="antialiased text-foreground-light bg-canvas-light dark:text-foreground-dark dark:bg-canvas-dark selection:bg-blue-600 selection:text-white">
+        <AppLayout>{children}</AppLayout>
       </body>
     </html>
   );
