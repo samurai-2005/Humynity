@@ -2,22 +2,23 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 export default function SignUpPage() {
   const router = useRouter();
   const supabase = createClient();
-  
+
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [username, setUsername] = useState("");
-  
+
   const [countryCode, setCountryCode] = useState("+91");
   const [whatsapp, setWhatsapp] = useState("");
-  
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -28,35 +29,35 @@ export default function SignUpPage() {
     setError(null);
 
     try {
-      // 1. Check if the username is already taken BEFORE doing anything else
+      // 1. Verify username availability
       const { data: isAvailable, error: checkError } = await supabase.rpc(
-        'check_username_available', 
-        { target_username: username }
+        "check_username_available",
+        { target_username: username.trim() }
       );
 
       if (checkError) throw checkError;
 
       if (!isAvailable) {
-        setError("This public username is already taken. Please choose another.");
+        setError("This public username is already taken. Please pick another.");
         setLoading(false);
-        return; // Stop the signup process entirely
+        return;
       }
 
-      // 2. Merge the code and number for the database
-      const fullWhatsapp = `${countryCode}${whatsapp}`;
+      // 2. Format WhatsApp contact
+      const fullWhatsapp = `${countryCode}${whatsapp.trim()}`;
 
-      // 3. Proceed with secure account creation
+      // 3. Register user with secure metadata
       const { data, error: signUpError } = await supabase.auth.signUp({
-        email,
+        email: email.trim(),
         password,
         options: {
           data: {
-            first_name: firstName,
-            last_name: lastName,
-            username: username,
-            whatsapp: fullWhatsapp
-          }
-        }
+            first_name: firstName.trim(),
+            last_name: lastName.trim(),
+            username: username.trim(),
+            whatsapp: fullWhatsapp,
+          },
+        },
       });
 
       if (signUpError) throw signUpError;
@@ -65,38 +66,77 @@ export default function SignUpPage() {
         setSuccess(true);
         setTimeout(() => {
           router.push("/login");
-        }, 3000);
+        }, 2200);
       }
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || "Failed to create account. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-canvas-light dark:bg-canvas-dark relative">
-      <div className="absolute inset-0 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#363638_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none"></div>
+    <div className="min-h-screen bg-[#0d0f12] text-white flex flex-col items-center justify-center p-6 relative">
+      {/* Back to Home Button */}
+      <div className="absolute top-6 left-6 z-20">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium text-gray-300 transition-colors"
+        >
+          ← Back to Home
+        </Link>
+      </div>
 
-      <div className="w-full max-w-[480px] p-8 bg-surface-light/90 dark:bg-surface-dark/90 backdrop-blur-md border border-border-light dark:border-border-dark rounded-panel shadow-sm relative z-10">
+      {/* Main Registration Card */}
+      <div className="w-full max-w-[460px] bg-[#16191f] border border-white/10 rounded-2xl p-8 shadow-2xl relative z-10 space-y-6">
         
-        <h1 className="text-3xl font-semibold tracking-display mb-2 text-foreground-light dark:text-foreground-dark">
-          Initialize Node
-        </h1>
-        <p className="text-muted-light dark:text-muted-dark tracking-body text-sm mb-6">
-          Your real identity and contact details will remain strictly in the private vault. Only your username will be public.
-        </p>
+        {/* Header */}
+        <div className="text-center space-y-1.5">
+          <div className="w-11 h-11 mx-auto rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-500 flex items-center justify-center shadow-lg shadow-blue-500/10 mb-3">
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+            </svg>
+          </div>
+          <h1 className="text-xl font-bold tracking-wider uppercase text-white">
+            Create Account
+          </h1>
+          <p className="text-[11px] uppercase tracking-widest text-gray-400 font-medium">
+            Join Humynity • Verified Talent Portal
+          </p>
+        </div>
+
+        {/* Top Segmented Navigation (Direct Links) */}
+        <div className="grid grid-cols-2 p-1 bg-black/40 rounded-xl border border-white/5 text-xs font-semibold">
+          <Link
+            href="/login"
+            className="py-2.5 text-center rounded-lg text-gray-400 hover:text-white transition-all"
+          >
+            Sign In
+          </Link>
+          <Link
+            href="/signup"
+            className="py-2.5 text-center rounded-lg bg-blue-600 text-white shadow-md shadow-blue-600/30 transition-all"
+          >
+            Sign Up
+          </Link>
+        </div>
+
+        {/* Notice */}
+        <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs text-blue-300 leading-relaxed">
+          🔒 Your contact details and real name remain private. Only your chosen username is visible across the platform.
+        </div>
 
         <form onSubmit={handleSignUp} className="space-y-4">
           
-          <div className="grid grid-cols-2 gap-4">
+          {/* First & Last Name */}
+          <div className="grid grid-cols-2 gap-3">
             <input
               type="text"
               placeholder="First Name"
               value={firstName}
               onChange={(e) => setFirstName(e.target.value)}
               required
-              className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark text-foreground-light dark:text-foreground-dark placeholder:text-muted-light dark:placeholder:text-muted-dark transition-colors"
+              className="h-11 px-3.5 rounded-xl bg-[#0d0f12] border border-white/10 text-white placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500 transition-colors"
             />
             <input
               type="text"
@@ -104,69 +144,47 @@ export default function SignUpPage() {
               value={lastName}
               onChange={(e) => setLastName(e.target.value)}
               required
-              className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark text-foreground-light dark:text-foreground-dark placeholder:text-muted-light dark:placeholder:text-muted-dark transition-colors"
+              className="h-11 px-3.5 rounded-xl bg-[#0d0f12] border border-white/10 text-white placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500 transition-colors"
             />
           </div>
 
+          {/* Public Username */}
           <div>
             <input
               type="text"
-              placeholder="Public Username"
+              placeholder="Public Username (e.g. CodeNinja, TechLead)"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
-              className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark text-foreground-light dark:text-foreground-dark placeholder:text-muted-light dark:placeholder:text-muted-dark transition-colors"
+              className="w-full h-11 px-3.5 rounded-xl bg-[#0d0f12] border border-white/10 text-white placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500 transition-colors"
             />
           </div>
 
+          {/* WhatsApp */}
           <div className="flex gap-2">
             <select
               value={countryCode}
               onChange={(e) => setCountryCode(e.target.value)}
-              className="h-12 px-2 w-[120px] rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark text-foreground-light dark:text-foreground-dark transition-colors"
+              className="h-11 px-2.5 w-[110px] rounded-xl bg-[#0d0f12] border border-white/10 text-white text-xs focus:outline-none focus:border-blue-500 transition-colors"
             >
               <option value="+91">🇮🇳 +91</option>
-              <option value="+1">🇺🇸/🇨🇦 +1</option>
+              <option value="+1">🇺🇸 +1</option>
               <option value="+44">🇬🇧 +44</option>
               <option value="+61">🇦🇺 +61</option>
               <option value="+971">🇦🇪 +971</option>
               <option value="+65">🇸🇬 +65</option>
-              <option value="+60">🇲🇾 +60</option>
-              <option value="+64">🇳🇿 +64</option>
-              <option value="+81">🇯🇵 +81</option>
-              <option value="+86">🇨🇳 +86</option>
-              <option value="+82">🇰🇷 +82</option>
-              <option value="+49">🇩🇪 +49</option>
-              <option value="+33">🇫🇷 +33</option>
-              <option value="+39">🇮🇹 +39</option>
-              <option value="+34">🇪🇸 +34</option>
-              <option value="+31">🇳🇱 +31</option>
-              <option value="+55">🇧🇷 +55</option>
-              <option value="+52">🇲🇽 +52</option>
-              <option value="+27">🇿🇦 +27</option>
-              <option value="+966">🇸🇦 +966</option>
-              <option value="+62">🇮🇩 +62</option>
-              <option value="+63">🇵🇭 +63</option>
-              <option value="+84">🇻🇳 +84</option>
-              <option value="+66">🇹🇭 +66</option>
-              <option value="+234">🇳🇬 +234</option>
-              <option value="+254">🇰🇪 +254</option>
-              <option value="+20">🇪🇬 +20</option>
-              <option value="+880">🇧🇩 +880</option>
-              <option value="+92">🇵🇰 +92</option>
-              <option value="+94">🇱🇰 +94</option>
-              <option value="+977">🇳🇵 +977</option>
             </select>
             <input
               type="tel"
               placeholder="WhatsApp Number"
               value={whatsapp}
-              onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, ''))} 
+              onChange={(e) => setWhatsapp(e.target.value.replace(/\D/g, ""))}
               required
-              className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark text-foreground-light dark:text-foreground-dark placeholder:text-muted-light dark:placeholder:text-muted-dark transition-colors"
+              className="flex-1 h-11 px-3.5 rounded-xl bg-[#0d0f12] border border-white/10 text-white placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500 transition-colors"
             />
           </div>
 
+          {/* Email */}
           <div>
             <input
               type="email"
@@ -174,50 +192,51 @@ export default function SignUpPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark text-foreground-light dark:text-foreground-dark placeholder:text-muted-light dark:placeholder:text-muted-dark transition-colors"
+              className="w-full h-11 px-3.5 rounded-xl bg-[#0d0f12] border border-white/10 text-white placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500 transition-colors"
             />
           </div>
-          
+
+          {/* Password */}
           <div>
             <input
               type="password"
-              placeholder="Secure Password"
+              placeholder="Secure Password (min 6 characters)"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
-              className="w-full h-12 px-4 rounded-input border border-border-light dark:border-border-dark bg-canvas-light dark:bg-canvas-dark focus:outline-none focus:border-foreground-light dark:focus:border-foreground-dark text-foreground-light dark:text-foreground-dark placeholder:text-muted-light dark:placeholder:text-muted-dark transition-colors"
+              className="w-full h-11 px-3.5 rounded-xl bg-[#0d0f12] border border-white/10 text-white placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500 transition-colors"
             />
           </div>
 
           {error && (
-            <div className="text-sm text-canvas-light bg-foreground-light dark:text-canvas-dark dark:bg-foreground-dark p-3 rounded-input">
+            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400">
               {error}
             </div>
           )}
 
           {success ? (
-            <div className="w-full mt-4 p-4 rounded-panel bg-border-light dark:bg-border-dark text-foreground-light dark:text-foreground-dark text-center text-sm">
-              Identity securely logged. Please check your email to verify your account before logging in.
+            <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-400 text-center font-semibold">
+              ✓ Account created successfully! Redirecting to sign in...
             </div>
           ) : (
             <button
               type="submit"
               disabled={loading}
-              className="w-full h-12 mt-4 rounded-pill bg-foreground-light text-canvas-light dark:bg-foreground-dark dark:text-canvas-dark font-medium transition-transform active:scale-[0.985] disabled:opacity-50"
+              className="w-full h-12 bg-blue-600 hover:bg-blue-500 active:scale-[0.985] text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-blue-600/25"
             >
-              {loading ? "Encrypting..." : "Create Identity"}
+              {loading ? "Creating Account..." : "Create Account"}
             </button>
           )}
         </form>
 
-        <div className="mt-6 text-center">
-          <a
-            href="/login"
-            className="text-sm text-muted-light dark:text-muted-dark hover:text-foreground-light dark:hover:text-foreground-dark transition-colors"
-          >
-            Already established? Access console.
-          </a>
+        <div className="pt-2 text-center border-t border-white/5">
+          <p className="text-xs text-gray-400">
+            Already have an account?{" "}
+            <Link href="/login" className="text-blue-400 font-semibold hover:underline">
+              Sign In here
+            </Link>
+          </p>
         </div>
 
       </div>
