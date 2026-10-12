@@ -236,7 +236,7 @@ export default function UnifiedDashboard() {
               <button
                 onClick={handleWorkerRouting}
                 disabled={routingWorker}
-                className="w-full h-11 px-4 rounded-pill border border-border-light dark:border-border-dark hover:border-emerald-500 text-foreground-light dark:text-foreground-dark font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                className="w-full h-11 px-4 rounded-pill border border-border-light dark:border-border-light hover:border-emerald-500 text-foreground-light dark:text-foreground-dark font-semibold text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
               >
                 {routingWorker ? "Verifying..." : "Open Specialist Radar →"}
               </button>
@@ -303,7 +303,8 @@ export default function UnifiedDashboard() {
                     const isSearching = item.status === "searching";
                     const isLocked = item.status === "locked";
                     const isRated = item.status === "rated";
-                    const isCancelled = item.status === "cancelled";
+                    // Catch both cancelled and unmatched/expired tasks
+                    const isCancelled = ["cancelled", "unmatched", "expired"].includes(item.status);
 
                     return (
                       <tr
@@ -337,7 +338,9 @@ export default function UnifiedDashboard() {
                                 ? "bg-blue-500/10 text-blue-600 border border-blue-500/20"
                                 : isCancelled
                                 ? "bg-red-500/10 text-red-500 border border-red-500/20"
-                                : "bg-purple-500/10 text-purple-600 border border-purple-500/20"
+                                : isSearching
+                                ? "bg-purple-500/10 text-purple-600 border border-purple-500/20 animate-pulse"
+                                : "bg-neutral-500/10 text-neutral-500 border border-neutral-500/20"
                             }`}
                           >
                             {isDelivered
@@ -348,7 +351,9 @@ export default function UnifiedDashboard() {
                               ? "In Progress"
                               : isCancelled
                               ? "Cancelled / Refunded"
-                              : "Matching Specialist"}
+                              : isSearching
+                              ? "Matching Specialist"
+                              : item.status}
                           </span>
                         </td>
                         <td className="p-4 text-right">
@@ -369,17 +374,25 @@ export default function UnifiedDashboard() {
                           ) : isSearching ? (
                             <Link
                               href={`/client/radar?gigId=${item.id}`}
-                              className="text-blue-600 dark:text-blue-400 hover:underline font-semibold"
+                              className="inline-block h-8 px-3.5 rounded-pill bg-purple-500/10 hover:bg-purple-500/20 text-purple-600 dark:text-purple-400 font-bold text-xs leading-8 border border-purple-500/20 transition-all"
                             >
                               Live Radar →
                             </Link>
-                          ) : (
+                          ) : isCancelled ? (
+                            <span className="text-muted-light dark:text-muted-dark font-medium italic text-[11px]">
+                              Refunded
+                            </span>
+                          ) : isRated ? (
                             <Link
                               href={`/client/workspace/${item.id}`}
-                              className="text-muted-light dark:text-muted-dark hover:underline font-medium"
+                              className="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold"
                             >
-                              Workspace Details →
+                              Completed Summary →
                             </Link>
+                          ) : (
+                            <span className="text-muted-light dark:text-muted-dark italic text-[11px]">
+                              Unavailable
+                            </span>
                           )}
                         </td>
                       </tr>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, Suspense } from "react";
+import { useEffect, useState, useCallback, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -29,6 +29,8 @@ function RadarContent() {
   const [cancelError, setCancelError] = useState<string | null>(null);
 
   const isOrderId = typeof gigId === "string" && gigId.startsWith("order_");
+  const lastCandidateExpiryRef = useRef<string | null>(null);
+  const isAdvancingRef = useRef(false);
 
   const handleMatchedTransition = useCallback(
     (realUuid: string) => {
@@ -40,6 +42,29 @@ function RadarContent() {
     [router]
   );
 
+  // Advance to next specialist when current 60s window expires
+  const advanceToNextWorker = useCallback(async (targetGigId: string) => {
+    if (isAdvancingRef.current) return;
+    isAdvancingRef.current = true;
+    try {
+      const res = await fetch("/api/dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gigId: targetGigId }),
+      });
+      const data = await res.json();
+      if (data.status === "unmatched") {
+        setIsExhausted(true);
+      }
+    } catch (e) {
+      console.error("[Radar] Failed to trigger next dispatch:", e);
+    } finally {
+      setTimeout(() => {
+        isAdvancingRef.current = false;
+      }, 1500);
+    }
+  }, []);
+
   // Cycle status messages gently while client waits
   useEffect(() => {
     if (matchedWorker || isExhausted) return;
@@ -49,6 +74,7 @@ function RadarContent() {
     return () => clearInterval(interval);
   }, [matchedWorker, isExhausted]);
 
+  // Realtime & Polling Loop
   useEffect(() => {
     if (!gigId) return;
 
@@ -64,40 +90,84 @@ function RadarContent() {
       );
     };
 
-    // 1. Polling fallback every 2 seconds
-    const pollInterval = setInterval(async () => {
-      let query = supabase.from("gigs").select("id, status, worker_id");
+    const processGigState = (gig: any) => {
+      if (!isMounted || !gig) return;
+
+      setResolvedUuid(gig.id);
+
+      // 1. Worker Claimed
+      if (isClaimed(gig.status, gig.worker_id)) {
+        handleMatchedTransition(gig.id);
+        return;
+      }
+
+      // 2. Unmatched / Cancelled / Expired
+      if (gig.status === "cancelled" || gig.status === "unmatched") {
+        setIsExhausted(true);
+        return;
+      }
+
+      // 3. Sync remaining countdown timer
+      if (gig.created_at) {
+        const elapsed = Math.floor((Date.now() - new Date(gig.created_at).getTime()) / 1000);
+        const remaining = Math.max(0, 300 - elapsed);
+        setTotalTimeLeft(remaining);
+      }
+
+      // 4. Check if current candidate's strict 60s offer expired
+      if (gig.status === "searching" && gig.dispatch_expires_at) {
+        const expiresAtMs = new Date(gig.dispatch_expires_at).getTime();
+        const nowMs = Date.now();
+
+        if (nowMs >= expiresAtMs && lastCandidateExpiryRef.current !== gig.dispatch_expires_at) {
+          lastCandidateExpiryRef.current = gig.dispatch_expires_at;
+          advanceToNextWorker(gig.id);
+        }
+      }
+    };
+
+   // Safe Polling Query (with automatic column fallback)
+    const fetchCurrentGig = async () => {
+      let query: any = supabase
+        .from("gigs")
+        .select("id, status, worker_id, created_at, dispatch_expires_at");
+
       if (isOrderId) {
         query = query.eq("razorpay_order_id", gigId);
       } else {
         query = query.eq("id", gigId);
       }
 
-      const { data: gig, error } = await query.maybeSingle();
+      const { data: gig, error: pollErr } = await query.maybeSingle();
 
-      if (error) {
-        console.error("[Client Radar Poll Error]:", error);
+      if (pollErr) {
+        // Fallback to core columns if dispatch_expires_at isn't cached yet
+        let fallbackQuery: any = supabase
+          .from("gigs")
+          .select("id, status, worker_id, created_at");
+
+        if (isOrderId) {
+          fallbackQuery = fallbackQuery.eq("razorpay_order_id", gigId);
+        } else {
+          fallbackQuery = fallbackQuery.eq("id", gigId);
+        }
+
+        const { data: fallbackGig } = await fallbackQuery.maybeSingle();
+        if (fallbackGig) processGigState(fallbackGig);
         return;
       }
 
-      if (!isMounted || !gig) return;
+      if (gig) processGigState(gig);
+    };
 
-      setResolvedUuid(gig.id);
+    // Run immediate check on mount
+    fetchCurrentGig();
 
-      if (isClaimed(gig.status, gig.worker_id)) {
-        clearInterval(pollInterval);
-        handleMatchedTransition(gig.id);
-      } else if (gig.status === "cancelled" || gig.status === "unmatched") {
-        clearInterval(pollInterval);
-        setIsExhausted(true);
-      }
-    }, 2000);
+    // Poll every 2 seconds
+    const pollInterval = setInterval(fetchCurrentGig, 2000);
 
-    // 2. Realtime Postgres Changes Listener
-    const channelFilter = isOrderId
-      ? `razorpay_order_id=eq.${gigId}`
-      : `id=eq.${gigId}`;
-
+    // Realtime Postgres Changes Listener
+    const channelFilter = isOrderId ? `razorpay_order_id=eq.${gigId}` : `id=eq.${gigId}`;
     const channel = supabase
       .channel(`gig_tracker_${gigId}`)
       .on(
@@ -109,17 +179,7 @@ function RadarContent() {
           filter: channelFilter,
         },
         (payload) => {
-          const updated = payload.new as any;
-          if (isMounted && updated) {
-            setResolvedUuid(updated.id);
-            if (isClaimed(updated.status, updated.worker_id)) {
-              clearInterval(pollInterval);
-              handleMatchedTransition(updated.id);
-            } else if (updated.status === "cancelled" || updated.status === "unmatched") {
-              clearInterval(pollInterval);
-              setIsExhausted(true);
-            }
-          }
+          processGigState(payload.new);
         }
       )
       .subscribe();
@@ -129,9 +189,9 @@ function RadarContent() {
       clearInterval(pollInterval);
       supabase.removeChannel(channel);
     };
-  }, [gigId, isOrderId, handleMatchedTransition, supabase]);
+  }, [gigId, isOrderId, handleMatchedTransition, advanceToNextWorker, supabase]);
 
-  // 5-Minute Countdown clock
+  // Countdown timer ticker
   useEffect(() => {
     if (totalTimeLeft <= 0) {
       setIsExhausted(true);
@@ -139,7 +199,13 @@ function RadarContent() {
     }
 
     const timer = setInterval(() => {
-      setTotalTimeLeft((prev) => prev - 1);
+      setTotalTimeLeft((prev) => {
+        if (prev <= 1) {
+          setIsExhausted(true);
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
 
     return () => clearInterval(timer);
@@ -193,7 +259,7 @@ function RadarContent() {
     <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark flex items-center justify-center p-6 text-foreground-light dark:text-foreground-dark relative">
       <div className="w-full max-w-md bg-surface-light dark:bg-surface-dark rounded-panel p-8 shadow-xl border border-border-light dark:border-border-dark text-center relative z-10">
 
-        {/* STATE 1: SPECIALISTS AT CAPACITY / CANCELLED / REFUNDED */}
+        {/* STATE 1: SPECIALISTS AT CAPACITY / UNMATCHED / REFUNDED */}
         {isExhausted ? (
           <div className="space-y-6 animate-in fade-in zoom-in-95 duration-200">
             <div className="w-16 h-16 mx-auto bg-amber-500/10 text-amber-500 flex items-center justify-center rounded-full">
@@ -205,7 +271,7 @@ function RadarContent() {
             <div>
               <h2 className="text-2xl font-bold tracking-tight">Specialists Currently Busy</h2>
               <p className="text-muted-light dark:text-muted-dark text-sm mt-2 leading-relaxed">
-                All qualified specialists in this domain are currently engaged with active tasks.
+                No verified specialists with this specific skillset are available right now.
               </p>
             </div>
 
@@ -224,7 +290,7 @@ function RadarContent() {
             </button>
           </div>
 
-        /* STATE 2: SPECIALIST MATCHED & ACCEPTED */
+        /* STATE 2: SPECIALIST MATCHED */
         ) : matchedWorker ? (
           <div className="space-y-6 animate-in fade-in zoom-in-95 duration-200">
             <div className="w-20 h-20 mx-auto bg-emerald-500/10 text-emerald-500 flex items-center justify-center rounded-full">
@@ -241,10 +307,9 @@ function RadarContent() {
             <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" />
           </div>
 
-        /* STATE 3: SEARCHING & MATCHING (CONSUMER TRACKING VIEW) */
+        /* STATE 3: ACTIVE SEARCH RADAR */
         ) : (
           <div className="space-y-8 animate-in fade-in duration-200">
-            {/* Animated Search Radar Icon */}
             <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
               <span className="absolute inset-0 rounded-full bg-blue-500/20 animate-ping" />
               <div className="relative w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-500/30">
@@ -261,7 +326,6 @@ function RadarContent() {
               </p>
             </div>
 
-            {/* Matching Window Status Card */}
             <div className="bg-canvas-light dark:bg-canvas-dark p-4 rounded-input border border-border-light dark:border-border-dark space-y-3 text-sm text-left">
               <div className="flex justify-between items-center">
                 <span className="text-xs font-medium uppercase tracking-wider text-muted-light dark:text-muted-dark">
@@ -276,7 +340,6 @@ function RadarContent() {
               </p>
             </div>
 
-            {/* Cancel Button */}
             <button
               type="button"
               onClick={() => setShowCancelModal(true)}
@@ -288,7 +351,7 @@ function RadarContent() {
         )}
       </div>
 
-      {/* CUSTOM IN-APP CANCEL CONFIRMATION MODAL (NO BROWSER ALERTS) */}
+      {/* CANCEL CONFIRMATION MODAL */}
       {showCancelModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
           <div className="w-full max-w-sm bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-panel p-6 shadow-2xl text-center space-y-5">

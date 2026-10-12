@@ -33,7 +33,7 @@ export default function ClientWorkspacePage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // 1. Initial Load & Realtime Sync
+  // 1. Initial Load & Route Guard
   useEffect(() => {
     if (!gigId) return;
 
@@ -49,7 +49,15 @@ export default function ClientWorkspacePage() {
       if (error) {
         console.error("[Client Workspace] Fetch error:", error);
       } else if (isMounted && data) {
-        setGig(data as Gig);
+        const currentGig = data as Gig;
+
+        // GUARD 1: If still searching for a specialist, redirect to live radar
+        if (currentGig.status === "searching") {
+          router.replace(`/client/radar?gigId=${currentGig.id}`);
+          return;
+        }
+
+        setGig(currentGig);
       }
       if (isMounted) setLoading(false);
     };
@@ -68,7 +76,12 @@ export default function ClientWorkspacePage() {
         },
         (payload) => {
           if (isMounted) {
-            setGig(payload.new as Gig);
+            const updated = payload.new as Gig;
+            if (updated.status === "searching") {
+              router.replace(`/client/radar?gigId=${updated.id}`);
+              return;
+            }
+            setGig(updated);
           }
         }
       )
@@ -78,18 +91,14 @@ export default function ClientWorkspacePage() {
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [gigId, supabase]);
+  }, [gigId, supabase, router]);
 
-  // 2. Countdown Timer
+  // 2. Countdown Timer (Only ticks if a specialist is actively locked & working)
   const [timeLeft, setTimeLeft] = useState<number>(0);
 
   useEffect(() => {
-    if (
-      !gig?.locked_at ||
-      gig.status === "delivered" ||
-      gig.status === "rated" ||
-      gig.status === "cancelled"
-    ) {
+    if (!gig?.locked_at || gig.status !== "locked") {
+      setTimeLeft(0);
       return;
     }
 
@@ -178,7 +187,7 @@ export default function ClientWorkspacePage() {
           href="/dashboard"
           className="h-10 px-6 rounded-pill bg-foreground-light dark:bg-foreground-dark text-canvas-light dark:text-canvas-dark font-medium text-sm flex items-center justify-center"
         >
-          Return to Hub
+          Return to Dashboard
         </Link>
       </div>
     );
@@ -186,8 +195,9 @@ export default function ClientWorkspacePage() {
 
   const isDelivered = gig.status === "delivered";
   const isApproved = gig.status === "rated";
-  const isCancelled = gig.status === "cancelled";
-  const isRevision = gig.status === "locked" && (gig.revision_count || 0) > 0;
+  const isCancelled = ["cancelled", "unmatched", "expired"].includes(gig.status);
+  const isWorking = gig.status === "locked";
+  const isRevision = isWorking && (gig.revision_count || 0) > 0;
 
   return (
     <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark py-8 px-6 text-foreground-light dark:text-foreground-dark">
@@ -202,14 +212,16 @@ export default function ClientWorkspacePage() {
                 <span
                   className={`px-3 py-0.5 rounded-pill text-xs font-bold uppercase tracking-wider ${
                     isDelivered
-                      ? "bg-blue-500/10 text-blue-600 border border-blue-500/20"
+                      ? "bg-amber-500/10 text-amber-600 border border-amber-500/20"
                       : isApproved
                       ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20"
                       : isCancelled
                       ? "bg-red-500/10 text-red-500 border border-red-500/20"
                       : isRevision
                       ? "bg-amber-500/10 text-amber-600 border border-amber-500/20"
-                      : "bg-blue-500/10 text-blue-600 border border-blue-500/20"
+                      : isWorking
+                      ? "bg-blue-500/10 text-blue-600 border border-blue-500/20"
+                      : "bg-neutral-500/10 text-neutral-500 border border-neutral-500/20"
                   }`}
                 >
                   {isDelivered
@@ -217,10 +229,12 @@ export default function ClientWorkspacePage() {
                     : isApproved
                     ? "Completed & Released"
                     : isCancelled
-                    ? "Gig Cancelled"
+                    ? "Cancelled & Refunded"
                     : isRevision
                     ? `Revision #${gig.revision_count} Active`
-                    : "Specialist In Progress"}
+                    : isWorking
+                    ? "Specialist In Progress"
+                    : "Task Status: " + gig.status}
                 </span>
               </div>
               <p className="text-xs text-muted-light dark:text-muted-dark">
@@ -231,6 +245,15 @@ export default function ClientWorkspacePage() {
                 • Allocation: {gig.time_limit_hours} Hours
               </p>
             </div>
+
+            <div className="pt-4 mt-2">
+              <Link
+                href="/dashboard"
+                className="text-xs text-muted-light dark:text-muted-dark hover:underline"
+              >
+                ← Back to Dashboard
+              </Link>
+            </div>
           </div>
 
           <div className="bg-surface-light dark:bg-surface-dark p-6 rounded-panel border border-border-light dark:border-border-dark flex flex-col justify-center items-center text-center">
@@ -240,12 +263,18 @@ export default function ClientWorkspacePage() {
                 : isApproved
                 ? "Task Completed"
                 : isCancelled
-                ? "Terminated"
+                ? "Payment State"
                 : "Delivery Window"}
             </span>
             <span
               className={`text-3xl font-mono font-bold ${
-                timeLeft < 1800 && !isDelivered && !isApproved && !isCancelled
+                isCancelled
+                  ? "text-red-500"
+                  : isApproved
+                  ? "text-emerald-500"
+                  : isDelivered
+                  ? "text-amber-500"
+                  : timeLeft < 1800
                   ? "text-red-500"
                   : "text-foreground-light dark:text-foreground-dark"
               }`}
@@ -255,7 +284,7 @@ export default function ClientWorkspacePage() {
                 : isApproved
                 ? "Closed"
                 : isCancelled
-                ? "Cancelled"
+                ? "Refunded"
                 : formattedTime}
             </span>
           </div>
@@ -296,12 +325,14 @@ export default function ClientWorkspacePage() {
                 Escrow Details
               </h3>
               <div className="flex justify-between text-sm py-1 border-b border-border-light dark:border-border-dark">
-                <span className="text-muted-light dark:text-muted-dark">Held in Escrow</span>
+                <span className="text-muted-light dark:text-muted-dark">Specialist Reward</span>
                 <span className="font-mono font-bold">₹{gig.base_budget}</span>
               </div>
               <div className="flex justify-between text-sm py-1">
-                <span className="text-muted-light dark:text-muted-dark">Protection</span>
-                <span className="text-emerald-500 font-semibold">Active & Secured</span>
+                <span className="text-muted-light dark:text-muted-dark">Protection State</span>
+                <span className={`font-semibold ${isCancelled ? "text-amber-500" : isApproved ? "text-emerald-500" : "text-emerald-500"}`}>
+                  {isCancelled ? "100% Refund Released" : isApproved ? "Settled via Escrow" : "Active & Secured"}
+                </span>
               </div>
             </div>
           </div>
@@ -316,8 +347,8 @@ export default function ClientWorkspacePage() {
                 </p>
               </div>
 
-              {/* State 1: Active In Progress (Worker Working) */}
-              {!isDelivered && !isApproved && !isCancelled && (
+              {/* State 1: Active In Progress (Worker Assigned & Working) */}
+              {isWorking && (
                 <div className="p-12 text-center space-y-3 bg-canvas-light dark:bg-canvas-dark rounded-panel border border-border-light dark:border-border-dark">
                   <div className="w-12 h-12 mx-auto rounded-full bg-blue-500/10 text-blue-600 flex items-center justify-center animate-pulse">
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -347,18 +378,31 @@ export default function ClientWorkspacePage() {
                   </div>
                   <h3 className="text-lg font-bold text-emerald-600">Task Approved & Escrow Released</h3>
                   <p className="text-xs text-muted-light dark:text-muted-dark">
-                    Escrow settlement has been initiated to the specialist via RazorpayX.
+                    Escrow settlement has been completed. The deliverable has been archived to your account.
                   </p>
                 </div>
               )}
 
-              {/* State 3: Cancelled */}
+              {/* State 3: Cancelled / Unmatched / Expired */}
               {isCancelled && (
-                <div className="p-12 text-center space-y-3 bg-red-500/10 border border-red-500/20 rounded-panel">
-                  <h3 className="text-lg font-bold text-red-500">Task Cancelled</h3>
-                  <p className="text-xs text-muted-light dark:text-muted-dark">
-                    This task was forfeited. Escrow authorization release has been initiated.
-                  </p>
+                <div className="p-12 text-center space-y-4 bg-red-500/10 border border-red-500/20 rounded-panel">
+                  <div className="w-12 h-12 mx-auto rounded-full bg-red-500/20 text-red-500 flex items-center justify-center">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-lg font-bold text-red-500">Task Cancelled & Refunded</h3>
+                    <p className="text-xs text-muted-light dark:text-muted-dark max-w-md mx-auto">
+                      No specialist claimed this task within the matching window. The escrow authorization has been released and 100% of the funds have been returned to your original payment method.
+                    </p>
+                  </div>
+                  <Link
+                    href="/client/post-job"
+                    className="inline-flex items-center h-10 px-5 rounded-pill bg-foreground-light dark:bg-foreground-dark text-canvas-light dark:text-canvas-dark text-xs font-semibold"
+                  >
+                    Post a New Task →
+                  </Link>
                 </div>
               )}
 

@@ -23,6 +23,13 @@ export async function POST(req: Request) {
       timeLimit,
       category,
       selectedSkills,
+      // Triage & Execution Metadata
+      executionMode,
+      modeRationale,
+      clientActionInstruction,
+      requiredFiles,
+      manifestRaw,
+      githubUrl,
     } = body;
 
     // 1. Strict Server-Side Validation
@@ -41,20 +48,21 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2. Compute fee and escrow (Zero trust on client-side math)
+    // 2. Compute fee and escrow (30% platform & tax overhead)
     const platformFee = Math.round(numBudget * 0.30);
     const totalEscrow = numBudget + platformFee;
     const escrowPaise = totalEscrow * 100;
 
-    // 3. Create the Razorpay Order with boolean payment_capture (Auth Hold)
+    // 3. Create the Razorpay Order with payment_capture = false (Auth Hold)
     const orderPayload = {
       amount: escrowPaise,
       currency: "INR",
       receipt: `rcpt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      payment_capture: false, // false = Authorize / Manual hold
+      payment_capture: false, // Authorize / Manual Escrow Hold
       notes: {
         category: category || "General",
         poster_id: posterId,
+        execution_mode: executionMode || "async_task",
       },
     };
 
@@ -64,7 +72,7 @@ export async function POST(req: Request) {
       currency: string;
     };
 
-    // 4. Persist task to Supabase bound to the authenticated posterId
+    // 4. Persist task to Supabase with triage metadata
     const { data: gig, error: dbError } = await supabase
       .from("gigs")
       .insert({
@@ -80,6 +88,13 @@ export async function POST(req: Request) {
         razorpay_order_id: order.id,
         status: "searching",
         lifecycle_state: "searching",
+        // Extended Triage Fields
+        execution_mode: executionMode === "live_workspace" ? "live_workspace" : "async_task",
+        mode_rationale: modeRationale || null,
+        client_action_instruction: clientActionInstruction || null,
+        required_files: Array.isArray(requiredFiles) ? requiredFiles : [],
+        manifest_raw: manifestRaw || null,
+        github_url: githubUrl || null,
       })
       .select("id")
       .single();
